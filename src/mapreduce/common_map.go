@@ -6,8 +6,15 @@ import (
 	"hash/fnv"
 	"io/ioutil"
 	"os"
+	"reflect"
 	"unsafe"
 )
+
+func BytesToString(b []byte) string {
+	bh := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	sh := reflect.StringHeader{bh.Data, bh.Len}
+	return *(*string)(unsafe.Pointer(&sh))
+}
 
 // 分区和排序
 // Partitioner的作用：
@@ -40,45 +47,41 @@ func doMap(
 	if contents, errOnReadFile := ioutil.ReadFile(inFile); errOnReadFile == nil {
 
 		// contents_result := strings.Replace(string(contents), "\n", "", 1)
-		contents_result := string(contents)
-
-		// fmt.Println("aaaaaa" + contents_result)
+		contents_result := BytesToString(contents)
 
 		//open input file read and  send file contents to map
 		mapResKeyValueArr := mapF(inFile, contents_result)
-
+		fmt.Println("AAAAA")
+		fmt.Println(mapResKeyValueArr[2])
 		//partition result by hash
-		for _, kv := range mapResKeyValueArr {
-			reduceTaskInt := ihash(kv.Key) % nReduce
 
-			//caculate and generate intermediate file name
-			intermediateFileName := reduceName(jobName, mapTask, reduceTaskInt)
-			fileName := "/Users/xiao/PRJOFMIT/intermediates/" + intermediateFileName + ".json"
-			filePtr, errOnCreate := os.Create(fileName)
+		for r := 0; r < nReduce; r++ {
 
-			// fmt.Println("mapFile " + intermediateFileName + ": start writing")
+			intermediateFileName := reduceName(jobName, mapTask, r)
+			filePtr, errOnCreate := os.Create(intermediateFileName)
 
 			if errOnCreate != nil {
 				fmt.Println("创建文件失败，err=", errOnCreate)
 				return
 			}
 
-			// defer filePtr.Close()
+			for _, kv := range mapResKeyValueArr {
+				reduceTaskInt := ihash(kv.Key) % nReduce
+				if reduceTaskInt == r {
+					//caculate and generate intermediate file name
+					encoder := json.NewEncoder(filePtr)
+					errOnEncode := encoder.Encode(&kv)
 
-			encoder := json.NewEncoder(filePtr)
-			errOnEncode := encoder.Encode(&kv)
-
-			if errOnEncode != nil {
-				fmt.Println("编码失败，err=", errOnEncode)
-			} else {
-				// fmt.Println("编码成功")
+					if errOnEncode != nil {
+						fmt.Println("编码失败，err=", errOnEncode)
+					} else {
+						// fmt.Println("编码成功")
+					}
+				}
 			}
 			filePtr.Close()
-			// fmt.Println("mapFile " + intermediateFileName + ": writed over")
-
 		}
 
-		//and write into corresponding file
 	}
 
 	//Call ihash() (see
