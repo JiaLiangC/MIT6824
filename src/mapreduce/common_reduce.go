@@ -52,7 +52,7 @@ func doReduce(
 				kvs[tmp.Key] = []string{}
 			}
 
-			kvs[tmp.Key] = append(kvs[tmp.Key], tmp.Key)
+			kvs[tmp.Key] = append(kvs[tmp.Key], tmp.Value)
 		}
 
 		// write return value of reduceF to output file
