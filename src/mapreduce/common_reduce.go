@@ -3,15 +3,16 @@ package mapreduce
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 )
 
-type ByKey []KeyValue
+// type ByKey []KeyValue
 
-func (a ByKey) Len() int           { return len(a) }
-func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+// func (a ByKey) Len() int           { return len(a) }
+// func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+// func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 func doReduce(
 	jobName string, // the name of the whole MapReduce job
@@ -21,70 +22,73 @@ func doReduce(
 	reduceF func(key string, values []string) string,
 ) {
 
-	intermediateFileName := reduceName(jobName, nMap, reduceTask)
-	fileName := "/Users/xiao/PRJOFMIT/intermediates/" + intermediateFileName + ".json"
+	//每个 map 都产生了特定reduce 的文件，所以reduce需要去拉取到所有的这些map产生的文件
 
-	var finalRes string
+	kvs := make(map[string][]string)
 
-	if mapFilePtr, errOnOpen := os.Open(fileName); errOnOpen == nil {
+	for m := 0; m < nMap; m++ {
 
-		// fmt.Println("reducefile" + fileName + ": start reading")
+		mapFilePtr, errOnOpen := os.Open(reduceName(jobName, m, reduceTask))
+		fmt.Println(reduceName(jobName, m, reduceTask))
+
+		if errOnOpen != nil {
+			log.Fatal("doReduce: ", errOnOpen)
+		}
 
 		decoder := json.NewDecoder(mapFilePtr)
 
-		var kvarr []KeyValue
-
-		for i := 0; decoder.More(); i++ {
-
+		// decode map intermediate file content to kvs
+		for {
 			var tmp KeyValue
 			errOnDecode := decoder.Decode(&tmp)
 
 			if errOnDecode != nil {
 				fmt.Println("解码失败=", errOnDecode)
+				break
 			}
-			kvarr[i] = tmp
-		}
+			_, ok := kvs[tmp.Key]
 
-		// sort by key
-		sort.Sort(ByKey(kvarr))
-
-		var vValues []string
-		var inputKey string
-
-		//after sort collect values of a key
-		for index, kv := range kvarr {
-			if inputKey == "" {
-				inputKey = kv.Key
+			if !ok {
+				kvs[tmp.Key] = []string{}
 			}
-			vValues[index] = kv.Value
-		}
 
-		//invoke reduceF
-		finalRes = reduceF(inputKey, vValues)
+			kvs[tmp.Key] = append(kvs[tmp.Key], tmp.Key)
+		}
 
 		// write return value of reduceF to output file
 		mapFilePtr.Close()
-		// fmt.Println("reducefile" + fileName + " :read over")
 	}
 
-	ResultFilePtr, errOnCreate := os.Create(outFile)
+	//collect and sort keys
+	var keys []string
+	for k := range kvs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 
+	// fmt.Println(keys)
+
+	ResultFilePtr, errOnCreate := os.Create(outFile)
 	if errOnCreate != nil {
 		fmt.Println("创建文件失败，err=", errOnCreate)
 		return
 	}
-
 	encoder := json.NewEncoder(ResultFilePtr)
 
-	errOnEncode := encoder.Encode(&finalRes)
+	//invoke reduceF per distinct key
+	for _, key := range keys {
 
-	if errOnEncode != nil {
-		fmt.Println("编码失败，err=", errOnEncode)
-	} else {
-		// fmt.Println("编码成功")
+		finalRes := reduceF(key, kvs[key])
+
+		errOnEncode := encoder.Encode(KeyValue{key, finalRes})
+		if errOnEncode != nil {
+			fmt.Println("编码失败，err=", errOnEncode)
+		}
 	}
+
 	ResultFilePtr.Close()
-	fmt.Println("finalRes: " + outFile + ": writed over")
+
+	// fmt.Println("finalRes: " + outFile + ": writed over")
 
 	//and write into corresponding file
 
