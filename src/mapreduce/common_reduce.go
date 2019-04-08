@@ -1,5 +1,18 @@
 package mapreduce
 
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
+)
+
+type ByKey []KeyValue
+
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
 func doReduce(
 	jobName string, // the name of the whole MapReduce job
 	reduceTask int, // which reduce task this is
@@ -7,6 +20,74 @@ func doReduce(
 	nMap int, // the number of map tasks that were run ("M" in the paper)
 	reduceF func(key string, values []string) string,
 ) {
+
+	intermediateFileName := reduceName(jobName, nMap, reduceTask)
+	fileName := "/Users/xiao/PRJOFMIT/intermediates/" + intermediateFileName + ".json"
+
+	var finalRes string
+
+	if mapFilePtr, errOnOpen := os.Open(fileName); errOnOpen == nil {
+
+		// fmt.Println("reducefile" + fileName + ": start reading")
+
+		decoder := json.NewDecoder(mapFilePtr)
+
+		var kvarr []KeyValue
+
+		for i := 0; decoder.More(); i++ {
+
+			var tmp KeyValue
+			errOnDecode := decoder.Decode(&tmp)
+
+			if errOnDecode != nil {
+				fmt.Println("解码失败=", errOnDecode)
+			}
+			kvarr[i] = tmp
+		}
+
+		// sort by key
+		sort.Sort(ByKey(kvarr))
+
+		var vValues []string
+		var inputKey string
+
+		//after sort collect values of a key
+		for index, kv := range kvarr {
+			if inputKey == "" {
+				inputKey = kv.Key
+			}
+			vValues[index] = kv.Value
+		}
+
+		//invoke reduceF
+		finalRes = reduceF(inputKey, vValues)
+
+		// write return value of reduceF to output file
+		mapFilePtr.Close()
+		// fmt.Println("reducefile" + fileName + " :read over")
+	}
+
+	ResultFilePtr, errOnCreate := os.Create(outFile)
+
+	if errOnCreate != nil {
+		fmt.Println("创建文件失败，err=", errOnCreate)
+		return
+	}
+
+	encoder := json.NewEncoder(ResultFilePtr)
+
+	errOnEncode := encoder.Encode(&finalRes)
+
+	if errOnEncode != nil {
+		fmt.Println("编码失败，err=", errOnEncode)
+	} else {
+		// fmt.Println("编码成功")
+	}
+	ResultFilePtr.Close()
+	fmt.Println("finalRes: " + outFile + ": writed over")
+
+	//and write into corresponding file
+
 	//
 	// doReduce manages one reduce task: it should read the intermediate
 	// files for the task, sort the intermediate key/value pairs by key,
