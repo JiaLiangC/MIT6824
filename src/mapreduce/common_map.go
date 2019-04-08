@@ -1,16 +1,89 @@
 package mapreduce
 
 import (
+	"encoding/json"
+	"fmt"
 	"hash/fnv"
+	"io/ioutil"
+	"os"
+	"unsafe"
 )
+
+// 分区和排序
+// Partitioner的作用：
+// 对map端输出的数据key作一个散列，使数据能够均匀分布在各个reduce上进行后续操作，避免产生热点区。
+
+//(Partition)分区出现的必要性，如何使用Hadoop产生一个全局排序的文件？
+// 最简单的方法就是使用一个分区，但是该方法在处理大型文件时效率极低，
+//因为一台机器必须处理所有输出文件，从而完全丧失了MapReduce所提供的并行架构的优势。
+//事实上我们可以这样做，首先创建一系列排好序的文件；其次，串联这些文件（类似于归并排序）；
+//最后得到一个全局有序的文件。主要的思路是使用一个partitioner来描述全局排序的输出。
+//比方说我们有1000个1-10000的数据，跑10个ruduce任务，
+//如果我们运行进行partition的时候，能够将在1-1000中数据的分配到第一个reduce中，1001-2000的数据分配到第二个reduce中，以此类推。
+//即第n个reduce所分配到的数据全部大于第n-1个reduce中的数据。
+//这样，每个reduce出来之后都是有序的了，我们只要cat所有的输出文件，变成一个大的文件，就都是有序的了
+
+// 它以key的Hash值对Reducer的数目取模，得到对应的Reducer。这样保证如果有相同的key值，
+// 肯定被分配到同一个reducre上。如果有N个reducer，编号就为0,1,2,3……(N-1)。
 
 func doMap(
 	jobName string, // the name of the MapReduce job
 	mapTask int, // which map task this is
-	inFile string,
+	inFile string, //this just is a file name!
 	nReduce int, // the number of reduce task that will be run ("R" in the paper)
 	mapF func(filename string, contents string) []KeyValue,
 ) {
+
+	//Step1 first read the file and transfer it to users function mapF
+	//The map function is called once for each file of input
+
+	if contents, errOnReadFile := ioutil.ReadFile(inFile); errOnReadFile == nil {
+
+		// contents_result := strings.Replace(string(contents), "\n", "", 1)
+		contents_result := string(contents)
+
+		// fmt.Println("aaaaaa" + contents_result)
+
+		//open input file read and  send file contents to map
+		mapResKeyValueArr := mapF(inFile, contents_result)
+
+		//partition result by hash
+		for _, kv := range mapResKeyValueArr {
+			reduceTaskInt := ihash(kv.Key) % nReduce
+
+			//caculate and generate intermediate file name
+			intermediateFileName := reduceName(jobName, mapTask, reduceTaskInt)
+			fileName := "/Users/xiao/PRJOFMIT/intermediates/" + intermediateFileName + ".json"
+			filePtr, errOnCreate := os.Create(fileName)
+
+			// fmt.Println("mapFile " + intermediateFileName + ": start writing")
+
+			if errOnCreate != nil {
+				fmt.Println("创建文件失败，err=", errOnCreate)
+				return
+			}
+
+			// defer filePtr.Close()
+
+			encoder := json.NewEncoder(filePtr)
+			errOnEncode := encoder.Encode(&kv)
+
+			if errOnEncode != nil {
+				fmt.Println("编码失败，err=", errOnEncode)
+			} else {
+				// fmt.Println("编码成功")
+			}
+			filePtr.Close()
+			// fmt.Println("mapFile " + intermediateFileName + ": writed over")
+
+		}
+
+		//and write into corresponding file
+	}
+
+	//Call ihash() (see
+	// below) on each key, mod nReduce, to pick r for a key/value pair.
+
 	//
 	// doMap manages one map task: it should read one of the input files
 	// (inFile), call the user-defined map function (mapF) for that file's
