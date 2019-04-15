@@ -82,6 +82,9 @@ func Sequential(jobName string, files []string, nreduce int,
 // helper function that sends information about all existing
 // and newly registered workers to channel ch. schedule()
 // reads ch to learn about workers.
+//之前注册的workers，如果有之前注册的works ,分别启动一个线程
+//，每个线程做的事就是把它的rpc address 都放入ch通道中。
+
 func (mr *Master) forwardRegistrations(ch chan string) {
 	i := 0
 	for {
