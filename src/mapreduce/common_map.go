@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
+	"log"
 	"os"
 	"reflect"
 	"unsafe"
@@ -44,44 +45,43 @@ func doMap(
 	//Step1 first read the file and transfer it to users function mapF
 	//The map function is called once for each file of input
 
-	if contents, errOnReadFile := ioutil.ReadFile(inFile); errOnReadFile == nil {
+	contents, errOnReadFile := ioutil.ReadFile(inFile)
+	if errOnReadFile != nil {
+		log.Printf("read file %s failed", inFile)
+	}
 
-		// contents_result := strings.Replace(string(contents), "\n", "", 1)
-		contents_result := BytesToString(contents)
+	contents_result := BytesToString(contents)
+	//open input file read and  send file contents to map
+	mapResKeyValueArr := mapF(inFile, contents_result)
 
-		//open input file read and  send file contents to map
-		mapResKeyValueArr := mapF(inFile, contents_result)
-		fmt.Println("AAAAA")
-		fmt.Println(mapResKeyValueArr[2])
-		//partition result by hash
+	//store encorder
+	var encorders = make([]*json.Encoder, nReduce)
 
-		for r := 0; r < nReduce; r++ {
+	//create files
+	for r := 0; r < nReduce; r++ {
+		intermediateFileName := reduceName(jobName, mapTask, r)
 
-			intermediateFileName := reduceName(jobName, mapTask, r)
-			filePtr, errOnCreate := os.Create(intermediateFileName)
+		filePtr, errOnCreate := os.Create(intermediateFileName)
+		defer filePtr.Close()
 
-			if errOnCreate != nil {
-				fmt.Println("创建文件失败，err=", errOnCreate)
-				return
-			}
-
-			for _, kv := range mapResKeyValueArr {
-				reduceTaskInt := ihash(kv.Key) % nReduce
-				if reduceTaskInt == r {
-					//caculate and generate intermediate file name
-					encoder := json.NewEncoder(filePtr)
-					errOnEncode := encoder.Encode(&kv)
-
-					if errOnEncode != nil {
-						fmt.Println("编码失败，err=", errOnEncode)
-					} else {
-						// fmt.Println("编码成功")
-					}
-				}
-			}
-			filePtr.Close()
+		if errOnCreate != nil {
+			fmt.Println("创建文件失败，err=", errOnCreate)
+			return
 		}
+		encorders[r] = json.NewEncoder(filePtr)
+	}
 
+	//reduceTaskInt 和encorders 中文件句柄的下标记是对应的
+	for _, kv := range mapResKeyValueArr {
+		reduceTaskInt := ihash(kv.Key) % nReduce
+
+		errOnEncode := encorders[reduceTaskInt].Encode(&kv)
+
+		if errOnEncode != nil {
+			fmt.Println("编码失败，err=", errOnEncode)
+		} else {
+			// fmt.Println("编码成功")
+		}
 	}
 
 	//Call ihash() (see
