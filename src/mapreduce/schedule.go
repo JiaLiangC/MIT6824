@@ -1,6 +1,9 @@
 package mapreduce
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 //
 // schedule() starts and waits for all tasks in the given phase (mapPhase
@@ -32,23 +35,6 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 	//
 	// Your code here (Part III, Part IV).
 	//
-
-	var p DoTaskArgs
-	p.JobName = jobName
-	p.Phase = phase
-
-	var tasksNum int
-
-	if phase == mapPhase {
-		tasksNum = len(mapFiles)
-
-	} else {
-		tasksNum = nReduce
-	}
-
-	fmt.Printf("tasksNum")
-	fmt.Printf("%v", tasksNum)
-
 	//这里的 w := <-registerChan ,  registerChan 是一个无缓冲的管道, 负责传递已经存在的RPC地址和新注册的RPC调用地址
 	//master.go中的 forwardRegistrations  方法会启用多个线程把查到的地址通过管道传过来
 	//所以一个个读取效率不高，可以开启多线程读取
@@ -66,23 +52,58 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 	//所以考虑两种情况，当消费者成功执行完毕时需要放回地址到workers中去，以便后续的消费者使用
 	//当消费者消费失败时也需要把该地址放回去，以便与后续的消费使用。
 	//对goroutine 的生产者和消费者不够熟悉，对chanel个 waitgroup 不熟悉
-	//开写之前先去完成相关的demo
 
-	for i := 0; i < tasksNum; i++ {
+	// 此处该实现一个生产者消费者模型, 生产者负责分发任务，消费者负责消费任务
+	// 生产者分发任务ID ，任务ID都存在队列里（此处用channel 当消息队列）
+	// 消费者负责拿到任务信息后启动一个worker 去完成任务。
+	// 生产者等到队列为空，且所有worker都完成再退出
+	//
 
-		w := <-registerChan
+	var p DoTaskArgs
+	p.JobName = jobName
+	p.Phase = phase
+	p.NumOtherPhase = n_other
 
-		p.TaskNumber = i
-		file := mapFiles[i]
-		p.File = file
+	var workG sync.WaitGroup
+	var taskChan = make(chan int)
 
-		//等待一个worker完成后给它另一个task.  sync.WaitGroup
-		ok := call(w, "Worker.DoTask", p, nil)
+	//生产者线程
+	go func() {
 
-		if ok == false {
-			fmt.Printf("worker read error", w)
-		} else {
+		for taskIndex := 0; taskIndex < ntasks; taskIndex++ {
+			workG.Add(1)
+			taskChan <- taskIndex
 		}
+
+		//等到所有任务都完成为止
+		workG.Wait()
+		close(taskChan)
+	}()
+
+	//消费者线程
+	for taksIdx := range taskChan {
+		worker := <-registerChan
+
+		p.TaskNumber = taksIdx
+		if phase == mapPhase {
+			p.File = mapFiles[taksIdx]
+		}
+
+		go func(worker string, p DoTaskArgs) {
+			//等待一个worker完成后给它另一个task.  sync.WaitGroup
+			ok := call(worker, "Worker.DoTask", &p, nil)
+
+			if ok {
+				workG.Done()
+				//成功的任务把 worker地址 重新加回 可用worker 队列
+				registerChan <- worker
+			} else {
+				//任务失败返回时把worker 重新加回任务队列
+				fmt.Printf("worker execute error", worker)
+				taskChan <- p.TaskNumber
+			}
+		}(worker, p)
+
 	}
 
 }
