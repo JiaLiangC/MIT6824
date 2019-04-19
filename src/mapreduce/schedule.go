@@ -57,7 +57,20 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 	// 生产者分发任务ID ，任务ID都存在队列里（此处用channel 当消息队列）
 	// 消费者负责拿到任务信息后启动一个worker 去完成任务。
 	// 生产者等到队列为空，且所有worker都完成再退出
-	//
+
+	//RPC 调用失败不代表task 执行失败，也许worker 在执行但是 reply 丢失了，或许是RPC 超时了，
+	//但是 master 会把这个task派发给其他的worker
+	//这就会导致有多个 worker 在处理同一个任务，计算并且生成同样的输出。
+	//但是 map 和 reduce 函数 是幂等的，所以即使后续任务读取这两个不同worker 产生的相同的文件也不会出错，
+	//因为一次只会读取到一个，但是不管读取到哪个，它们都是相同的
+	//此外 MapReduce 框架确保 map 和reduce 的输出是原子的，一次只会有一个成功。输出文件要么不存在，要么只会存在一个。
+
+	//如果一个worker失败了，任何master对它的调用都会失败。因此，如果master对于worker的RPC调用失败，那么master应该重写分配任务到其他worker。
+	//一个RPC的失败并不一定就意味着worker失败，也许worker只是现在不可达，但是它依然还在执行计算。因此，可能发生两个worker接受到同样的任务然后进行计算。
+	//但是，因为任务是幂等的，所以同一个任务计算两遍也没有关系－－两次输出都是相同的结果。所以你不需要针对这个案例做任何特殊的操作。
+
+	//我们的测试永远不会在任务的中间失败，所以你根本不需要担心一些workers输入到同一个文件。）
+	//(the lab code doesn't actually implement this, but instead only fails workers at the end of a task, so there aren't concurrent executions of a task)
 
 	var p DoTaskArgs
 	p.JobName = jobName
