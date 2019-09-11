@@ -9,6 +9,7 @@ import (
 )
 
 // Shutdown is an RPC method that shuts down the Master's RPC server.
+//收到 Shutdown RPC 调用后 关闭通道
 func (mr *Master) Shutdown(_, _ *struct{}) error {
 	debug("Shutdown: registration server\n")
 	close(mr.shutdown)
@@ -18,6 +19,12 @@ func (mr *Master) Shutdown(_, _ *struct{}) error {
 
 // startRPCServer starts the Master's RPC server. It continues accepting RPC
 // calls (Register in particular) for as long as the worker is alive.
+
+//这个方法好，master在启动 RPCserver后，
+//用一个go程死循环，等待worker的注册的请求
+//然后在for死循环中用了select 去读取管道，等待关闭信号跳出死循环，结束go程
+
+
 func (mr *Master) startRPCServer() {
 	rpcs := rpc.NewServer()
 	rpcs.Register(mr)
@@ -39,9 +46,9 @@ func (mr *Master) startRPCServer() {
 			default:
 			}
 			conn, err := mr.l.Accept()
-			if err == nil {
+			if err == nil { 
 				go func() {
-					rpcs.ServeConn(conn)
+					rpc.ServeConn(conn)
 					conn.Close()
 				}()
 			} else {
@@ -56,6 +63,8 @@ func (mr *Master) startRPCServer() {
 // stopRPCServer stops the master RPC server.
 // This must be done through an RPC to avoid race conditions between the RPC
 // server thread and the current thread.
+
+// 停止RPC server ，调用RPC调用 shudown
 func (mr *Master) stopRPCServer() {
 	var reply ShutdownReply
 	ok := call(mr.address, "Master.Shutdown", new(struct{}), &reply)

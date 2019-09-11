@@ -11,6 +11,9 @@ import (
 
 // merge combines the results of the many reduce jobs into a single output file
 // XXX use merge sort
+// 首先打开所有的reduce结果文件，解码结果并按照key归并结果，
+//然后按照key排序，把该key 和他的values 全都写入最终的结果文件中
+
 func (mr *Master) merge() {
 	debug("Merge phase")
 	kvs := make(map[string]string)

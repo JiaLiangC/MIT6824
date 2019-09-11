@@ -17,23 +17,6 @@ func BytesToString(b []byte) string {
 	return *(*string)(unsafe.Pointer(&sh))
 }
 
-// 分区和排序
-// Partitioner的作用：
-// 对map端输出的数据key作一个散列，使数据能够均匀分布在各个reduce上进行后续操作，避免产生热点区。
-
-//(Partition)分区出现的必要性，如何使用Hadoop产生一个全局排序的文件？
-// 最简单的方法就是使用一个分区，但是该方法在处理大型文件时效率极低，
-//因为一台机器必须处理所有输出文件，从而完全丧失了MapReduce所提供的并行架构的优势。
-//事实上我们可以这样做，首先创建一系列排好序的文件；其次，串联这些文件（类似于归并排序）；
-//最后得到一个全局有序的文件。主要的思路是使用一个partitioner来描述全局排序的输出。
-//比方说我们有1000个1-10000的数据，跑10个ruduce任务，
-//如果我们运行进行partition的时候，能够将在1-1000中数据的分配到第一个reduce中，1001-2000的数据分配到第二个reduce中，以此类推。
-//即第n个reduce所分配到的数据全部大于第n-1个reduce中的数据。
-//这样，每个reduce出来之后都是有序的了，我们只要cat所有的输出文件，变成一个大的文件，就都是有序的了
-
-// 它以key的Hash值对Reducer的数目取模，得到对应的Reducer。这样保证如果有相同的key值，
-// 肯定被分配到同一个reducre上。如果有N个reducer，编号就为0,1,2,3……(N-1)。
-
 func doMap(
 	jobName string, // the name of the MapReduce job
 	mapTask int, // which map task this is
@@ -52,12 +35,33 @@ func doMap(
 
 	contents_result := BytesToString(contents)
 	//open input file read and  send file contents to map
+
+
+	// 首先把该worker 接收到的文件用用户输入的map方法处理，返回一个k,v数组
 	mapResKeyValueArr := mapF(inFile, contents_result)
 
 	//store encorder
 	var encorders = make([]*json.Encoder, nReduce)
 
 	//create files
+	// 分区和排序
+	// Partitioner的作用：
+	// 对map端输出的数据key作一个散列，使数据能够均匀分布在各个reduce上进行后续操作，避免产生热点区。
+
+	// 它以key的Hash值对 Reducer 的数目取模，得到对应的Reducer。这样保证如果有相同的key值，
+	// 肯定被分配到同一个reducre上。如果有N个reducer，编号就为0,1,2,3……(N-1)。
+
+	//每个worker都会接收到一个文件输入，首先对该输入的文件用 用户输入的map方法处理，返回一个k,v数组
+	//然后再生成n个文件，这里n就是reduce的个数
+	//比如有N个reduce，这里就把输入分成n份
+	//map 函数用来处理文件，得到的是一个文件的内容，返回的是K,v形式的数据，
+	//我们把数据根据key进行hash 然后对reduce数取模，分片到不同的reduce文件中去
+	//到这里map的任务就结束了
+	//map可以保证相同的key的数据肯定会被打到同一个reduce上
+	//这里为甚么会出现多个key分配到同一个reduce的场景？
+	//因为是先对 key hash，然后再取模，取模的过程就会导致多个key落到同一个reduce上
+	//但是 同一个key的所有数据肯定会在同一个reduce上的，因为 key.hash%8 肯定在一个reduce上
+
 	for r := 0; r < nReduce; r++ {
 		intermediateFileName := reduceName(jobName, mapTask, r)
 

@@ -32,6 +32,7 @@ func makeSeed() int64 {
 
 // Randomize server handles
 func random_handles(kvh []*labrpc.ClientEnd) []*labrpc.ClientEnd {
+	//创建客户端对象
 	sa := make([]*labrpc.ClientEnd, len(kvh))
 	copy(sa, kvh)
 	for i := range sa {
@@ -66,6 +67,7 @@ func (cfg *config) checkTimeout() {
 	}
 }
 
+//杀掉所有的kv server
 func (cfg *config) cleanup() {
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
@@ -288,15 +290,35 @@ func (cfg *config) StartServer(i int) {
 	cfg.mu.Lock()
 
 	// a fresh set of outgoing ClientEnd names.
+	//cfg的endnames 是一个nxn 的数组，n个服务器，每个服务器
+	//都保存n个end names信息
 	cfg.endnames[i] = make([]string, cfg.n)
+	//endnames{server1: [server1, server2,...],server2: [server1, server2,...]}
+	//初始化endname ,赋值随机字符串
 	for j := 0; j < cfg.n; j++ {
 		cfg.endnames[i][j] = randstring(20)
 	}
 
 	// a fresh set of ClientEnds.
+	//ends 是大小为n 的 clientEnd 数组
+	//ends中存的是server i 的对应的其他所有服务器的endName随机字符串初始化的对象。
+	//通过这个ends 服务器i 可以连通到其他的所有服务器
 	ends := make([]*labrpc.ClientEnd, cfg.n)
 	for j := 0; j < cfg.n; j++ {
+		//初始化所有的server 的客户端，server的客户端用来和其他server 通信
+
 		ends[j] = cfg.net.MakeEnd(cfg.endnames[i][j])
+
+		//分别连接其他的所有的cfg.n 台server，
+		//cfg.endnames[i][j] 就是服务器i对应的有联系的j服务器的数据，这里存的是一个随机字符串作为服务器i连接服务器j的地址
+		//初始化服务器i 的0-n个服务器
+		//其中会服务器i的endNames中的其他服务器endName地址(j),
+		// 然后j会被作为serverName 存入对应server 的net 的 collection的
+		//所以下面两个参数是服务器i连接到达服务器j的地址，j就是服务器名
+		//所以下面Connect函数做的就是 一个map存，server 联通的另一个服务器的地址 和 server
+		//server 不做key是怕重复，所有服务器互相连通的key都不同么，所以拿来做key,存在config里
+		//这里就是为了模拟RPC通信做准备
+		//	rn.connections[endname] = servername
 		cfg.net.Connect(cfg.endnames[i][j], j)
 	}
 
@@ -312,7 +334,9 @@ func (cfg *config) StartServer(i int) {
 	}
 	cfg.mu.Unlock()
 
+	//ends上面初始化好了的对应其他所有服务器的clientEnd
 	cfg.kvservers[i] = StartKVServer(ends, i, cfg.saved[i], cfg.maxraftstate)
+	//每个KVserver 中有一个raft实例来实现底层的一致性工作
 
 	kvsvc := labrpc.MakeService(cfg.kvservers[i])
 	rfsvc := labrpc.MakeService(cfg.kvservers[i].rf)
@@ -337,6 +361,7 @@ func (cfg *config) Leader() (bool, int) {
 
 // Partition servers into 2 groups and put current leader in minority
 func (cfg *config) make_partition() ([]int, []int) {
+	//是否是leader
 	_, l := cfg.Leader()
 	p1 := make([]int, cfg.n/2+1)
 	p2 := make([]int, cfg.n/2)
@@ -357,14 +382,18 @@ func (cfg *config) make_partition() ([]int, []int) {
 
 var ncpu_once sync.Once
 
+//创建 n 个 servers
 func make_config(t *testing.T, n int, unreliable bool, maxraftstate int) *config {
+
 	ncpu_once.Do(func() {
 		if runtime.NumCPU() < 2 {
 			fmt.Printf("warning: only one CPU, which may conceal locking bugs\n")
 		}
 		rand.Seed(makeSeed())
 	})
+
 	runtime.GOMAXPROCS(4)
+
 	cfg := &config{}
 	cfg.t = t
 	cfg.net = labrpc.MakeNetwork()

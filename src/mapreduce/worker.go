@@ -41,12 +41,18 @@ func (wk *Worker) DoTask(arg *DoTaskArgs, _ *struct{}) error {
 	fmt.Printf("%s: given %v task #%d on file %s (nios: %d)\n",
 		wk.name, arg.Phase, arg.TaskNumber, arg.File, arg.NumOtherPhase)
 
+	//这里为啥要用lock 不用lock可以么，初步怀疑是其他go程中也有该woker的地址，
+	//防止状态不一致
+
+
 	wk.Lock()
 	wk.nTasks += 1
 	wk.concurrent += 1
 	nc := wk.concurrent
 	wk.Unlock()
 
+
+	//一个worker同时只能接受一个任务，并且返回该任务的执行状态
 	if nc > 1 {
 		// schedule() should never issue more than one RPC at a
 		// time to a given worker.
@@ -72,6 +78,11 @@ func (wk *Worker) DoTask(arg *DoTaskArgs, _ *struct{}) error {
 		time.Sleep(time.Second)
 	}
 
+
+
+	//parallelism 参数是为了支持多任务，这里的doMap 和 doReduce 应该设置成可以快速返回的函数，里面用go routine
+	//问题是这里如果快速返回，那么master不知道任务是否完成，而且reduce 必须等待map完成，增加了设计的复杂性，所以用了
+	//串行的方式实现
 	switch arg.Phase {
 	case mapPhase:
 		doMap(arg.JobName, arg.TaskNumber, arg.File, arg.NumOtherPhase, wk.Map)
@@ -105,6 +116,9 @@ func (wk *Worker) Shutdown(_ *struct{}, res *ShutdownReply) error {
 }
 
 // Tell the master we exist and ready to work
+
+//启动后向master 注册自己，用了同步的注册方式，等待返回结果。
+//call方法中调用了rpc call
 func (wk *Worker) register(master string) {
 	args := new(RegisterArgs)
 	args.Worker = wk.name
@@ -116,6 +130,12 @@ func (wk *Worker) register(master string) {
 
 // RunWorker sets up a connection with the master, registers its address, and
 // waits for tasks to be scheduled.
+// 1.初始化worker
+// 2.调用NewServer()，启动一个RPC server 
+// 然后调用net.Listen 获得一个监听器，然后调用监听器的方法，阻塞处理连接到服务器的请求。
+// 3.向master节点注册自己
+// 4.死循环中循环服务请求，并把请求交给  rpcs.ServeConn 来处理，用一个select 配合管道结束服务，关闭监听器。
+
 func RunWorker(MasterAddress string, me string,
 	MapFunc func(string, string) []KeyValue,
 	ReduceFunc func(string, []string) string,
@@ -128,6 +148,7 @@ func RunWorker(MasterAddress string, me string,
 	wk.Reduce = ReduceFunc
 	wk.nRPC = nRPC
 	wk.parallelism = parallelism
+
 	rpcs := rpc.NewServer()
 	rpcs.Register(wk)
 	os.Remove(me) // only needed for "unix"
@@ -148,9 +169,15 @@ func RunWorker(MasterAddress string, me string,
 		wk.Unlock()
 		conn, err := wk.l.Accept()
 		if err == nil {
+
+			//因为其他的RPC go程中用到了 worker，所以用锁，保护竞争的资源，保证资源的一致性
+
 			wk.Lock()
 			wk.nRPC--
 			wk.Unlock()
+
+
+			//这里用了 一个 go程去分别处理每个请求，不然是同步的没啥性能
 			go rpcs.ServeConn(conn)
 		} else {
 			break

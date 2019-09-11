@@ -21,6 +21,8 @@ const RaftElectionTimeout = 1000 * time.Millisecond
 
 func TestInitialElection2A(t *testing.T) {
 	servers := 3
+
+	// 创建 servers 个 raft
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
 
@@ -36,6 +38,7 @@ func TestInitialElection2A(t *testing.T) {
 
 	// does the leader+term stay the same if there is no network failure?
 	time.Sleep(2 * RaftElectionTimeout)
+	//检查term ,用于检测网络不正常情况下是否有乱选举的情况
 	term2 := cfg.checkTerms()
 	if term1 != term2 {
 		fmt.Printf("warning: term changed even though there were no failures")

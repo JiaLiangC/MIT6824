@@ -102,6 +102,10 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 			p.File = mapFiles[taksIdx]
 		}
 
+
+		//master一旦开始调度后就一直for循环等待所有的任务被分发完成，返回
+		//这里每拿到一个机器资源，就启用一个go程对该worker进行DoTask RPC 调用
+
 		go func(worker string, p DoTaskArgs) {
 			//等待一个worker完成后给它另一个task.  sync.WaitGroup
 			ok := call(worker, "Worker.DoTask", &p, nil)

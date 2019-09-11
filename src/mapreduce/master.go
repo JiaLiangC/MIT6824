@@ -168,6 +168,8 @@ func (mr *Master) killWorkers() []int {
 	for _, w := range mr.workers {
 		debug("Master: shutdown worker %s\n", w)
 		var reply ShutdownReply
+
+		//RPC 调用，让远端的机器关闭workers
 		ok := call(w, "Worker.Shutdown", new(struct{}), &reply)
 		if ok == false {
 			fmt.Printf("Master: RPC %s shutdown error\n", w)

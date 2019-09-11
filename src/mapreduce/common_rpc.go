@@ -48,6 +48,9 @@ type RegisterArgs struct {
 // please use call() to send all RPCs. please don't change this
 // function.
 //
+
+//rpc.Dial rpc服务端建立连接，返回连接
+//调用rpc的Call方法就行同步处理
 func call(srv string, rpcname string,
 	args interface{}, reply interface{}) bool {
 	c, errx := rpc.Dial("unix", srv)

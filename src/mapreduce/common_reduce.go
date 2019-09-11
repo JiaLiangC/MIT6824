@@ -23,11 +23,17 @@ func doReduce(
 ) {
 
 	//每个 map 都产生了特定reduce 的文件，所以reduce需要去拉取到所有的这些map产生的文件
+	// 每个map产生了n个文件（为每个reduce产生一个文件），所有的map总共产生了m x n个文件，
+	// 相同的key的数据都会被打到这个map下的同一个reduce的文件中去
+	//所以reduce 想要得到这个key的所有数据，需要去拉取所有map的属于他的文件
+
+	//第一步分别拉取 n个map 的任务，每拉取到一个map中对应于该reduce的文件，就读取文件内容，
+	//然后对该文件的内容中的key  组织起来 list{key1: [values],key1: [values]}
+	//最后list中的每个key使用用户传入的reduce 函数，并把用户reduce函数的输出结果写到输出文件
 
 	kvs := make(map[string][]string)
 
 	for m := 0; m < nMap; m++ {
-
 		mapFilePtr, errOnOpen := os.Open(reduceName(jobName, m, reduceTask))
 		fmt.Println(reduceName(jobName, m, reduceTask))
 
