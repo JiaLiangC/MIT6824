@@ -1,0 +1,60 @@
+领导者什么时候停止心跳服务？
+答：（一个任期内领导者会一直保持领导者身份，除非宕机)
+在心跳服务中判断领导者的身份
+
+
+领导者的任期是如何增长的？
+答：只要不宕机就一直是领导者，任期不变
+因为每次任期都是由一个选举发起的（raft的每一个任期以一次选举开始）
+
+问：只有leader 和 follower之间通讯么？
+答： Raft 的通讯只发生在 Leader Call Follower RPC 和 Candidate Call Follower RPC
+
+问：选举时的通信会重置到较大任期号么？
+答： 会， 
+    1.对于Candidate，当Candidate收到的Reply 发现自己任期号比较小，就会由Candidate 切换为Follower，
+任期号不变，任期号会在后续的心跳中更新.
+    2.对于Leader 和Follower，在AppendEntries 中收到较小的任期号，如果发现自己的身份是leader 就转变为Follower
+，并更新自己的任期。
+    3.其中Follower 在RequetsVote中如果发现自己任期号小，说明集群发生了选举，需要更新任期号，并且重置VotedFor
+
+这里为啥不判断Candidate的身份呢？ 个人觉得会在 RequestVote 的reply 中发现任期号小就被重置身份。
+(服务器之间通讯时会交换任期号，如果某个节点发现自己的任期号比别人小，就会把自己的任期号增到到较大值)
+
+
+问：Raft什么时候任期号会变？
+答：
+1.follower 转变为 candidate 时任期号会自加1
+2. RequestVote 和 AppendEntries 中，如果发现自己任期号比传进来的小
+就更新自己的任期号为较大者
+
+问：任期比对方小的原因？
+答：
+1.网络临时不通，产生选举出新的Leader，导致的leader的任期比对方小
+2.集群有新的Candidate产生时，由于任期会自增1，所以这时候的follower任期比对方小
+（当网络临时不畅通导致的发出选举，因为自己的任期比对方大？该怎么处理？
+因为votedFor 有值所以选举失败？
+）
+
+
+问：如何实现一个任期内只投票一次？
+答：在一个任期开始后先把VotedFor重置为空 
+
+问： 在哪几个条件下需要VotedFor重置为空？
+1.Raft初始化时重置 VotedFor
+2.在 RequestVote 如果发现任期号比对方小，说明集群发生了选举，并且合法，此时增加自己的任期号到较大值，并且重置VotedFor
+3.同上，在AppendEntries 中如果发现自己的任期比较小，说明属于Leader丢失重连，这时候Leader 转为Follower ，重置自己的VotedFor
+4.在Candidate 请求投票流程中，如果发现自己的任期号小于Reply的任期号就变为Follower，同时重置VotedFor
+
+
+问：Candidate选举期间收到心跳咋办？
+如果发现自己任期号比对方小,就变为Follower，并且重置自己的任期号。
+其实不管哪个角色收到心跳发现自己的任期号小，都会变为Follower，保证延迟情况下依然成为Follower
+
+
+
+
+//当leader 因为网络问题 断开重新加入后，因为其currentTerm 已经过期，所以被重置为follower
+
+候选人如果收到来自新领导人的合法附加日志RPC就转变为跟随者
+如果选举超时，就再发起一轮选举
