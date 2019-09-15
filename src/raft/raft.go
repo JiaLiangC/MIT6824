@@ -57,7 +57,7 @@ type Raft struct {
 	currentTerm int
 	votedFor    int //当前任期，把票投给谁了,一个任期只可以投票一次
 	leaderId    int
-	state    RaftState
+	state    int
 
     electionTimer  *time.Timer
     heartbeatTimer  *time.Timer
@@ -72,12 +72,17 @@ type Raft struct {
 	// state a Raft server must maintain.
 }
 
-type RaftState string
+
+// const(
+// 	Candidate RaftState = "Candidate"
+// 	Leader RaftState = "Leader"
+// 	Follower RaftState = "Follower"
+// )
 
 const(
-	Candidate RaftState = "Candidate"
-	Leader RaftState = "Leader"
-	Follower RaftState = "Follower"
+    Candidate = iota
+    Leader
+    Follower
 )
 
 // return currentTerm and whether this server
@@ -90,8 +95,25 @@ func (rf *Raft) GetState() (int, bool) {
     defer rf.mu.Unlock()
 
 	term = rf.currentTerm
-	isleader = rf.state==Leader
+	isleader = rf.state == Leader
+    DPrintf("[%d-%s]: isleader return: %t at term %d \n", rf.me, rf, isleader, rf.currentTerm)
 	return term, isleader
+}
+
+func (rf *Raft) String() string {
+    // rf.mu.Lock()
+    // defer rf.mu.Unlock()
+    //s死锁
+    switch rf.state {
+    case Leader:
+        return "Leader"
+    case Candidate:
+        return "Candiate"
+    case Follower:
+        return "Follower"
+    default:
+        return ""
+    }
 }
 
 //
@@ -192,7 +214,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply){
         //所以要被重置为follower
         //所以heartbeat Daemon 中要重新判断状态，多发的一个心跳因为任期小会被拒绝
         if args.Term > rf.currentTerm {
-            DPrintf("[%d-%s] args.Term %d.  rf.currentTerm%d",rf.me, rf.state, args.Term, rf.currentTerm)
+            DPrintf("[%d-%s] Candidate's Term is  %d.  rf's currentTerm is %d  \n",rf.me, rf, args.Term, rf.currentTerm)
             rf.state = Follower
             rf.currentTerm = args.Term
             rf.votedFor = -1
@@ -209,7 +231,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply){
             reply.VoteGranted = true
             reply.Term = rf.currentTerm
             
-            DPrintf("[%d-%s]: votedFor peer[%d] RPC call at term %d \n", rf.me, rf.state, args.CandidateId, rf.currentTerm)
+            DPrintf("[%d-%s]: votedFor peer[%d] RPC call at term %d \n", rf.me, rf, args.CandidateId, rf.currentTerm)
         }
     }
     //此时任期已经被第一个候选者的请求重置过了
@@ -231,7 +253,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
         reply.Term = rf.currentTerm
         return
     }
-
+    DPrintf("[%d-%s]:  receive heartbeat from peer[%d] at term %d", rf.me, rf, args.LeaderId, rf.currentTerm)
     //这里如果把state 判断放在前面就会被错误的请求给重置身份
     //所以放在过滤错误请求后
     //why does this 
@@ -260,7 +282,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
         rf.leaderId = args.LeaderId
     }
 
-    DPrintf("[%d-%s]:  send reset ElectionTimer signal at heartbeat at term %d", rf.me, rf.state, rf.currentTerm)
+    DPrintf("[%d-%s]:  send reset ElectionTimer signal at heartbeat at term %d", rf.me, rf, rf.currentTerm)
     rf.resetElection <- struct{}{}
 
 }
@@ -355,7 +377,7 @@ func (rf *Raft) Kill() {
 //10 heartbeat persecond adn make election timeout more large than 300, but not too large
 //because u need elected a leader in 5 second
 
-func (rf *Raft) sendHeartbeat() {
+func (rf *Raft) sendHeartbeat(id int) {
     //发送心跳前重置了Leader 自己的选举超时定时器
     //所以在 sendHeartbeat 发送心跳中要在peers中排除leader自己
     // rf.resetElection <- struct{}{} 放入了heartbeatDaemon中
@@ -366,40 +388,35 @@ func (rf *Raft) sendHeartbeat() {
     // args.LeaderId = rf.me
     // args.Entries = []int{}
 
-    peersIdx := len(rf.peers)
-    DPrintf("[%d-%s] start send Heartbeat to  peers at term %d", rf.me, rf.state, rf.currentTerm)
-    for idx:=0; idx < peersIdx; idx++ {
-        //返回了term用来更新自己?
-        //如果接收到的 RPC 请求或响应中，任期号 T > currentTerm ，那么就令 currentTerm 等于 T，并切换状态为跟随者
-        if idx != rf.me{
-            DPrintf("[%d-%s] send Heartbeat to  peers[%d] at term %d", rf.me, rf.state, idx, rf.currentTerm)
-            go func (id int) {
-                if rf.state != Leader{
-                    return
-                }
+    //返回了term用来更新自己?
+    //如果接收到的 RPC 请求或响应中，任期号 T > currentTerm ，那么就令 currentTerm 等于 T，并切换状态为跟随者
 
-                reply := &AppendEntriesReply{}
-                args := &AppendEntriesArgs{}
-                args.Term = rf.currentTerm
-                args.LeaderId = rf.me
-                args.Entries = []int{}
-                ok := rf.sendAppendEntries(id, args, reply)
-                if!ok{
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
+    DPrintf("[%d-%s] send Heartbeat to  peers[%d] at term %d", rf.me, rf, id, rf.currentTerm)
 
-                    DPrintf("[%d-%s] failed to send Heartbeat to  peers[%d] at term %d", rf.me, rf.state, id, rf.currentTerm)
-                }else{
-                    //finder new leader and turned to follower
-                    if !reply.Success{
-                        DPrintf("[%d-%s] send Heartbeat to  peers[%d] at term failed %d, finder new leader and turned to follower", rf.me, rf.state, idx, rf.currentTerm)
-                        rf.turnToFollower()
-                        rf.resetElection <- struct{}{}
-                        return
-                    }
-                }
-            }(idx)
+    if rf.state != Leader{
+        DPrintf("[%d-%s]: peer think he is not leader then return  %d",  rf.me, rf, rf.currentTerm)
+        return
+    }
+    reply := &AppendEntriesReply{}
+    args := &AppendEntriesArgs{}
+    args.Term = rf.currentTerm
+    args.LeaderId = rf.me
+    args.Entries = []int{}
+    ok := rf.sendAppendEntries(id, args, reply)
+    if!ok{
+        DPrintf("[%d-%s] failed to send Heartbeat to  peers[%d] at term %d", rf.me, rf, id, rf.currentTerm)
+    }else{
+        //finder new leader and turned to follower
+        if !reply.Success{
+            DPrintf("[%d-%s] send Heartbeat to  peers[%d] at term failed %d, finder new leader and turned to follower", rf.me, rf, id, rf.currentTerm)
+            rf.turnToFollower()
+            rf.resetElection <- struct{}{}
+            return
         }
     }
-	
+
 }
 
 
@@ -414,7 +431,8 @@ func (rf *Raft)turnToCandidate() {
     rf.currentTerm +=1
     rf.state = Candidate
     rf.votedFor = rf.me
-    DPrintf("[%d-%s] turned to  Candiate at term %d", rf.me, rf.state, rf.currentTerm)
+    DPrintf("[%d-%s]: electionTimer time out ,election triggered, ellection at term %d \n", rf.me, rf , rf.currentTerm)
+    DPrintf("[%d-%s] turned to  Candiate at term %d", rf.me, rf, rf.currentTerm)
 }
 
 func (rf * Raft)turnToFollower(){
@@ -428,10 +446,6 @@ func (rf * Raft)turnToFollower(){
 func (rf * Raft)canvassVotes() {
     rf.turnToCandidate()
 
-    rf.mu.Lock()
-    DPrintf("[%d-%s]: electionTimer time out ,election triggered, ellection at term %d \n", rf.me, rf.state, rf.currentTerm)
-    rf.mu.Unlock()
-
     var receivedVotesCnt int  = 1
     peersLen := len(rf.peers)
     rqVoteargs := &RequestVoteArgs{}
@@ -442,7 +456,7 @@ func (rf * Raft)canvassVotes() {
         //那么就令 currentTerm 等于 T，并切换状态为跟随者
         rf.mu.Lock()
         defer rf.mu.Unlock()
-        DPrintf("[%d-%s]: peer %d replyHandler. at term %d \n", rf.me, rf.state, rf.me, rf.currentTerm)
+        DPrintf("[%d-%s]: peer %d replyHandler. at term %d \n", rf.me, rf, rf.me, rf.currentTerm)
 
         if rf.state == Candidate{
             if reply.Term > rf.currentTerm{
@@ -460,7 +474,7 @@ func (rf * Raft)canvassVotes() {
                     //这里应该在 heartbeatDaemon 中第一时间重置electiontimer 并且发心跳
                     rf.state = Leader
                     go rf.heartbeatDaemon()
-                    DPrintf("[%d-%s]: peer %d become new leader. at term %d \n", rf.me, rf.state, rf.me, rf.currentTerm)
+                    DPrintf("[%d-%s]: peer %d become new leader. at term %d \n", rf.me, rf, rf.me, rf.currentTerm)
                     return
                 }
                 receivedVotesCnt += 1
@@ -478,7 +492,9 @@ func (rf * Raft)canvassVotes() {
                 if rf.sendRequestVote(i, rqVoteargs, reply){
                     replyHandler(reply)
                 }else{
-                    DPrintf("[%d-%s]  failed to send sendRequestVote RPC to peer[%d] at term %d", rf.me, rf.state, i, rf.currentTerm)
+                    rf.mu.Lock()
+                    DPrintf("[%d-%s]  failed to send sendRequestVote RPC to peer[%d] at term %d", rf.me, rf, i, rf.currentTerm)
+                    rf.mu.Unlock()
                 }
             }(idx)
         }
@@ -498,14 +514,13 @@ func (rf *Raft)heartbeatDaemon(){
     // rf.mu.Lock()
     // defer rf.mu.Unlock()
 
-    DPrintf("[%d-%s]: peer start sent  heartbeat at term %d",  rf.me, rf.state, rf.currentTerm)
+    DPrintf("[%d-%s]: peer start sent  heartbeat at term %d",  rf.me, rf, rf.currentTerm)
     rf.heartbeatTimer = time.NewTimer(1*time.Nanosecond)
     for{
         if _, isLeader := rf.GetState();!isLeader{
-            DPrintf("[%d-%s]: peer think he is not leader then return  %d",  rf.me, rf.state, rf.currentTerm)
+            DPrintf("[%d-%s]: peer think he is not leader then return  %d",  rf.me, rf, rf.currentTerm)
             return
         }
-        rf.resetElection <- struct{}{}
         select{
         case  <- rf.done:
             return
@@ -513,7 +528,13 @@ func (rf *Raft)heartbeatDaemon(){
             rf.heartbeatTimer.Reset(rf.heartbeatTimerInterval)
             //leader发送heartbeat前先重置自己的选举超时
             rf.resetElection <- struct{}{}
-            go rf.sendHeartbeat()
+            for i:=0; i<len(rf.peers); i++{
+                if i!= rf.me{
+                    go rf.sendHeartbeat(i)
+                }
+                
+            }
+            
         }
     }
 }
@@ -522,19 +543,20 @@ func (rf *Raft)electionDaemon() {
    //rf.electionTimer = time.NewTimer(rf.electionTimeOutDuration)
     //放在外面函数返回后容易造成变量丢失
     go func(){
-        rf.electionTimer = time.NewTimer(rf.electionTimeOutDuration)
-        defer rf.electionTimer.Stop()
+        DPrintf("[%d-%s]: peer start at term %d",  rf.me, rf, rf.currentTerm)
         for{
             select{
             case <- rf.done:
                 return
             case <-rf.resetElection:
-                DPrintf("[%d-%s]: peer reset electionTimer at term %d",  rf.me, rf.state, rf.currentTerm)
                 // Reset should be invoked only on stopped or expired timers with drained channels
                 if !rf.electionTimer.Stop(){
                     <-rf.electionTimer.C
                 }
                 rf.electionTimer.Reset(rf.electionTimeOutDuration)
+                rf.mu.Lock()
+                DPrintf("[%d-%s]: peer reset electionTimer at term %d",  rf.me, rf, rf.currentTerm)
+                rf.mu.Unlock()
             case <- rf.electionTimer.C:
                 //electionTimer 过期，触发选举
                 go rf.canvassVotes()
@@ -566,9 +588,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
     rf.done = make(chan interface{})
     rf.heartbeatTimerInterval = time.Millisecond*100
     rf.electionTimeOutDuration = time.Duration(randTimeOut())*time.Millisecond
-
+    rf.electionTimer = time.NewTimer(rf.electionTimeOutDuration)
 	//receive heart beat and reset timer
-
 	//election trigger on
     rf.electionDaemon()
 	// initialize from state persisted before a crash
@@ -580,6 +601,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 func randTimeOut() int {
     //rand的seed必须不同
     rand.Seed(time.Now().UnixNano())
-    randTimeOut := (250 + rand.Intn(150))
+    randTimeOut := (450 + rand.Intn(150))
     return randTimeOut
 }
