@@ -39,9 +39,9 @@ type config struct {
 	t         *testing.T
 	net       *labrpc.Network
 	n         int
-	rafts     []*Raft
+	rafts     []*Raft //存储所有的raft节点
 	applyErr  []string // from apply channel readers
-	connected []bool   // whether each server is on the net
+	connected []bool   // whether each server is on the net 标记所有的机器在线
 	saved     []*Persister
 	endnames  [][]string    // the port file names each sends to
 	logs      []map[int]int // copy of each server's committed entries
@@ -56,6 +56,9 @@ type config struct {
 
 var ncpu_once sync.Once
 
+
+
+//初始化config对象
 func make_config(t *testing.T, n int, unreliable bool) *config {
 	ncpu_once.Do(func() {
 		if runtime.NumCPU() < 2 {
@@ -67,7 +70,7 @@ func make_config(t *testing.T, n int, unreliable bool) *config {
 	cfg := &config{}
 	cfg.t = t
 	cfg.net = labrpc.MakeNetwork()
-	cfg.n = n
+	cfg.n = n    //这里的n就是机器的数量
 	cfg.applyErr = make([]string, cfg.n)
 	cfg.rafts = make([]*Raft, cfg.n)
 	cfg.connected = make([]bool, cfg.n)
@@ -76,6 +79,7 @@ func make_config(t *testing.T, n int, unreliable bool) *config {
 	cfg.logs = make([]map[int]int, cfg.n)
 	cfg.start = time.Now()
 
+	//设置网络是否为可靠
 	cfg.setunreliable(unreliable)
 
 	cfg.net.LongDelays(true)
@@ -87,6 +91,7 @@ func make_config(t *testing.T, n int, unreliable bool) *config {
 	}
 
 	// connect everyone
+	//每个机器都互加好友，互相联通
 	for i := 0; i < cfg.n; i++ {
 		cfg.connect(i)
 	}
@@ -95,8 +100,11 @@ func make_config(t *testing.T, n int, unreliable bool) *config {
 }
 
 // shut down a Raft server but save its persistent state.
+//
 func (cfg *config) crash1(i int) {
+	//让机器i和其他机器断开(互删好友)
 	cfg.disconnect(i)
+	//让client也联系不了这个机器
 	cfg.net.DeleteServer(i) // disable client connections to the server.
 
 	cfg.mu.Lock()
@@ -110,6 +118,7 @@ func (cfg *config) crash1(i int) {
 		cfg.saved[i] = cfg.saved[i].Copy()
 	}
 
+	//让这个raft节点杀死自己，然后cfd对应的raft标记为nil
 	rf := cfg.rafts[i]
 	if rf != nil {
 		cfg.mu.Unlock()
@@ -118,6 +127,7 @@ func (cfg *config) crash1(i int) {
 		cfg.rafts[i] = nil
 	}
 
+	//
 	if cfg.saved[i] != nil {
 		raftlog := cfg.saved[i].ReadRaftState()
 		cfg.saved[i] = &Persister{}
@@ -131,18 +141,23 @@ func (cfg *config) crash1(i int) {
 // allocate new outgoing port file names, and a new
 // state persister, to isolate previous instance of
 // this server. since we cannot really kill it.
-//
+//重启或者
+// ClientEnd 
+//启动初始化一个raft，并且用一个线程一直监听来自applyCh的信息，然后放入该机器对应的cfg[i]处的logs中对应的索引位置
 func (cfg *config) start1(i int) {
+	//杀死指定的raft几点并且保存状态
 	cfg.crash1(i)
 
 	// a fresh set of outgoing ClientEnd names.
 	// so that old crashed instance's ClientEnds can't send.
+	//初始化节点i 和其他节点的的通讯录(随机字符串初始化)
 	cfg.endnames[i] = make([]string, cfg.n)
 	for j := 0; j < cfg.n; j++ {
 		cfg.endnames[i][j] = randstring(20)
 	}
 
 	// a fresh set of ClientEnds.
+	//
 	ends := make([]*labrpc.ClientEnd, cfg.n)
 	for j := 0; j < cfg.n; j++ {
 		ends[j] = cfg.net.MakeEnd(cfg.endnames[i][j])
@@ -165,13 +180,20 @@ func (cfg *config) start1(i int) {
 
 	// listen to messages from Raft indicating newly committed messages.
 	applyCh := make(chan ApplyMsg)
-	go func() {
+	go func()
+		//1. 用for range 监听新的完成commit，被提交到状态机执行的命令
+		//2. 读取提交到int 的command 的值 忽略别的
+
+
 		for m := range applyCh {
 			err_msg := ""
 			if m.CommandValid == false {
 				// ignore other types of ApplyMsg
 			} else if v, ok := (m.Command).(int); ok {
 				cfg.mu.Lock()
+
+				//读取log中记录的所有节点对应于这条提交命令的的索引处的命令，和这次提交的命令对比，如果不一致，那这个状态机就是不一致的
+				//每次有applych 都检查所有节点的提交的日志和顺序是否一致
 				for j := 0; j < len(cfg.logs); j++ {
 					if old, oldok := cfg.logs[j][m.CommandIndex]; oldok && old != v {
 						// some server has already committed a different value for this entry!
@@ -179,13 +201,20 @@ func (cfg *config) start1(i int) {
 							m.CommandIndex, i, m.Command, j, old)
 					}
 				}
+
+				//取到服务器上一个提交的日志
 				_, prevok := cfg.logs[i][m.CommandIndex-1]
+
+				//把applyCh收到的command 赋值给服务器i ,放到对应的 commandIndex上
 				cfg.logs[i][m.CommandIndex] = v
+
+				//如果applyCh的日志索引超过最大的cfg规定的索引,就重新赋值cfg记录的最大索引
 				if m.CommandIndex > cfg.maxIndex {
 					cfg.maxIndex = m.CommandIndex
 				}
 				cfg.mu.Unlock()
 
+				//必须保证前一条日志是正确，逐次保证所有日志都是正确的
 				if m.CommandIndex > 1 && prevok == false {
 					err_msg = fmt.Sprintf("server %v apply out of order %v", i, m.CommandIndex)
 				}
@@ -208,6 +237,7 @@ func (cfg *config) start1(i int) {
 	cfg.rafts[i] = rf
 	cfg.mu.Unlock()
 
+	//用反射获取大写的方法，建立RPC服务
 	svc := labrpc.MakeService(rf)
 	srv := labrpc.MakeServer()
 	srv.AddService(svc)
@@ -232,6 +262,7 @@ func (cfg *config) cleanup() {
 }
 
 // attach server i to the net.
+//和指定的联系人互相加好友
 func (cfg *config) connect(i int) {
 	// fmt.Printf("connect(%d)\n", i)
 
@@ -255,6 +286,7 @@ func (cfg *config) connect(i int) {
 }
 
 // detach server i from the net.
+//和指定的一些联系人互删好友(互相删除对方的endNames)
 func (cfg *config) disconnect(i int) {
 	// fmt.Printf("disconnect(%d)\n", i)
 
@@ -295,6 +327,7 @@ func (cfg *config) setlongreordering(longrel bool) {
 
 // check that there's exactly one leader.
 // try a few times in case re-elections are needed.
+//检查每一个任期内只有一个 leader ，如果大于1 就报错
 func (cfg *config) checkOneLeader() int {
 	for iters := 0; iters < 10; iters++ {
 		ms := 450 + (rand.Int63() % 100)
@@ -356,6 +389,8 @@ func (cfg *config) checkNoLeader() {
 }
 
 // how many servers think a log entry is committed?
+//这里的参数index 是leader 收到command 放到日志后返回的最新的一个日志的索引
+//既针对某个日志索引，有多少raft commit 了该索引
 func (cfg *config) nCommitted(index int) (int, interface{}) {
 	count := 0
 	cmd := -1
@@ -419,41 +454,63 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // same value, since nCommitted() checks this,
 // as do the threads that read from applyCh.
 // returns index.
-// if retry==true, may submit the command multiple
+
+// if retry == true, may submit the command multiple
 // times, in case a leader fails just after Start().
 // if retry==false, calls Start() only once, in order
 // to simplify the early Lab 2B tests.
+
+//发送一个命令到第一个服务器，如果不是leader就发送到下一个，直到找到leader为止
+//发送命令后10s内不断检查日志是否一致，不一致就报错
 func (cfg *config) one(cmd int, expectedServers int, retry bool) int {
+	
 	t0 := time.Now()
 	starts := 0
+
 	for time.Since(t0).Seconds() < 10 {
 		// try all the servers, maybe one is the leader.
 		index := -1
 		for si := 0; si < cfg.n; si++ {
+
+			//start 增加不停的循环访问 cfg中所有的server,因为取余不会越界
 			starts = (starts + 1) % cfg.n
+
 			var rf *Raft
 			cfg.mu.Lock()
+
+			//如果该raft状态是在线的，就拿到它
 			if cfg.connected[starts] {
 				rf = cfg.rafts[starts]
 			}
+
 			cfg.mu.Unlock()
+
+			//如果raft 非空,就向其发送一个命令
 			if rf != nil {
 				index1, _, ok := rf.Start(cmd)
 				if ok {
+					//raft 返回的最近一条日志的索引，只有leader会应用日志，其他机器会忽略这个命令，并且返回-1的index
 					index = index1
 					break
 				}
 			}
 		}
 
+		//index不等于-1 说明找到了leader
 		if index != -1 {
 			// somebody claimed to be the leader and to have
 			// submitted our command; wait a while for agreement.
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
+				
+				//返回该索引处其他raft的cmd和承认commit了该索引处command的机器的数量
 				nd, cmd1 := cfg.nCommitted(index)
+
+				//如果承认该日志的机器大雨0，并且大于等于期待的承认该日志的机器数目
 				if nd > 0 && nd >= expectedServers {
 					// committed
+					//如果读出的cmd是int 并且是之前发送的命令，那就返回这个日志index
+					//如果没找到就20ms后继续找
 					if cmd2, ok := cmd1.(int); ok && cmd2 == cmd {
 						// and it was the command we submitted.
 						return index
@@ -476,6 +533,7 @@ func (cfg *config) one(cmd int, expectedServers int, retry bool) int {
 // print the Test message.
 // e.g. cfg.begin("Test (2B): RPC counts aren't too high")
 func (cfg *config) begin(description string) {
+
 	fmt.Printf("%s ...\n", description)
 	cfg.t0 = time.Now()
 	cfg.rpcs0 = cfg.rpcTotal()

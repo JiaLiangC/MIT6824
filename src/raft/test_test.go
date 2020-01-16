@@ -20,6 +20,7 @@ import "sync"
 const RaftElectionTimeout = 1000 * time.Millisecond
 
 func TestInitialElection2A(t *testing.T) {
+
 	servers := 3
 
 	// 创建 servers 个 raft
@@ -50,6 +51,8 @@ func TestInitialElection2A(t *testing.T) {
 	cfg.end()
 }
 
+
+
 func TestReElection2A(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false)
@@ -58,15 +61,20 @@ func TestReElection2A(t *testing.T) {
 	cfg.begin("Test (2A): election after network failure")
 
 	leader1 := cfg.checkOneLeader()
+	fmt.Printf("test:----------leader is: %d. \n",leader1)
 
 	// if the leader disconnects, a new one should be elected.
+	fmt.Printf("test:----------disconnect leader is: %d \n",leader1)
 	cfg.disconnect(leader1)
 	cfg.checkOneLeader()
+	fmt.Printf("test:----------check one leader is: %d. \n",leader1)
 
 	// if the old leader rejoins, that shouldn't
 	// disturb the new leader.
 	cfg.connect(leader1)
+	fmt.Printf("test:----------old rejoined leader is: %d. \n",leader1)
 	leader2 := cfg.checkOneLeader()
+	DPrintf("After if the old leader rejoins, that shouldn't  disturb the new leader.")
 
 	// if there's no quorum, no leader should
 	// be elected.
@@ -522,29 +530,41 @@ func TestPersist12C(t *testing.T) {
 	cfg.one(11, servers, true)
 
 	// crash and re-start all
+	//停止并重启所有的raft 服务
 	for i := 0; i < servers; i++ {
 		cfg.start1(i)
 	}
+
+	//断开并重新连接所有的raft
 	for i := 0; i < servers; i++ {
 		cfg.disconnect(i)
 		cfg.connect(i)
 	}
 
+	//发送命令12，并返回最后一致的日志的索引，不一致就报错
 	cfg.one(12, servers, true)
 
+	//检查一个任期内最多一个leader，否则报错
 	leader1 := cfg.checkOneLeader()
+	//断开leader1和其他机器的连接
 	cfg.disconnect(leader1)
+	//重新启动leader1，并且连接
 	cfg.start1(leader1)
 	cfg.connect(leader1)
 
+	//发送一个命令给raft们
 	cfg.one(13, servers, true)
 
+	//检查是否只有一个leader，并且断开该leader后继续个集群发送命令
+	//然后重新启动该leader，并连接如集群
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
 	cfg.one(14, servers-1, true)
 	cfg.start1(leader2)
 	cfg.connect(leader2)
 
+
+	//等待至少四个raft承认日志
 	cfg.wait(4, servers, -1) // wait for leader2 to join before killing i3
 
 	i3 := (cfg.checkOneLeader() + 1) % servers

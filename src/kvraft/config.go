@@ -106,16 +106,19 @@ func (cfg *config) SnapshotSize() int {
 
 // attach server i to servers listed in to
 // caller must hold cfg.mu
+//把一个联系人互相加回来，可以互相联系
 func (cfg *config) connectUnlocked(i int, to []int) {
 	// log.Printf("connect peer %d to %v\n", i, to)
 
 	// outgoing socket files
+	//把联系人的联系方式都加回来
 	for j := 0; j < len(to); j++ {
 		endname := cfg.endnames[i][to[j]]
 		cfg.net.Enable(endname, true)
 	}
 
 	// incoming socket files
+	//在对方的联系人列表中把自己也加回来
 	for j := 0; j < len(to); j++ {
 		endname := cfg.endnames[to[j]][i]
 		cfg.net.Enable(endname, true)
@@ -130,10 +133,14 @@ func (cfg *config) connect(i int, to []int) {
 
 // detach server i from the servers listed in from
 // caller must hold cfg.mu
+//把一个指定的server i 和 from 指定的server list 断开
+// cfg.endnames存储了所有server的联系人列表
+//cfg.endnames[i]存储的就是这个server 的联系人列表(电话号码列表)，每个元素就是一个联系人的endName(电话号码)
 func (cfg *config) disconnectUnlocked(i int, from []int) {
 	// log.Printf("disconnect peer %d from %v\n", i, from)
 
 	// outgoing socket files
+	//把这个server和其他的机器之间的socket file 干掉
 	for j := 0; j < len(from); j++ {
 		if cfg.endnames[i] != nil {
 			endname := cfg.endnames[i][from[j]]
@@ -141,6 +148,7 @@ func (cfg *config) disconnectUnlocked(i int, from []int) {
 		}
 	}
 
+	//然后把这个server 在其他server 的联系人列表中干掉，包括socket file(相当于干掉了联系人号码)
 	// incoming socket files
 	for j := 0; j < len(from); j++ {
 		if cfg.endnames[j] != nil {
@@ -150,6 +158,7 @@ func (cfg *config) disconnectUnlocked(i int, from []int) {
 	}
 }
 
+//加锁 删除这个人的指定的一些联系人，并且在对方联系人列表中把这个人也删除，就是互相删除
 func (cfg *config) disconnect(i int, from []int) {
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
@@ -164,6 +173,7 @@ func (cfg *config) All() []int {
 	return all
 }
 
+//加所有人的好友，互相加好友
 func (cfg *config) ConnectAll() {
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
