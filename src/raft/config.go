@@ -180,7 +180,7 @@ func (cfg *config) start1(i int) {
 
 	// listen to messages from Raft indicating newly committed messages.
 	applyCh := make(chan ApplyMsg)
-	go func()
+	go func(){
 		//1. 用for range 监听新的完成commit，被提交到状态机执行的命令
 		//2. 读取提交到int 的command 的值 忽略别的
 

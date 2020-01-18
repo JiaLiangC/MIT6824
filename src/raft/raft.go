@@ -23,6 +23,8 @@ import (
 "math/rand"
 "time"
 "sort"
+"bytes"
+"labgob"
 ) 
 // import "bytes"
 // import "labgob"
@@ -289,6 +291,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply){
             }
         }
     }
+
+    //这里为啥必须要persist
+    rf.persist()
 }
 
 
@@ -363,8 +368,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 
     //如果leader 的 日志比自己的短， 这里为啥不是 len(rf.logs -1)还有待学习
+    //1<=1，第一次日志的时候
     if args.PrevLogIndex < len(rf.logs){
         DPrintf("[%d-%s]: receive log at term %d，args.PrevLogIndex： %d, args.PrevLogTerm: %d, %d", rf.me, rf, rf.currentTerm, args.PrevLogIndex,args.PrevLogTerm, rf.logs[args.PrevLogIndex].Term)
+
+        //，args.PrevLogIndex 3  args.PrevLogTerm 10, rf.logs[args.PrevLogIndex].Term 10 8
+
 
         //如果leader的日志短，并且leader的最后一条日志的索引和任期都和己方对的上，那就按照leader的日志删去多余的自己的日志
         if args.PrevLogTerm == rf.logs[args.PrevLogIndex].Term{
@@ -387,22 +396,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
             reply.ConflictTerm = rf.logs[len(rf.logs)-1].Term
             reply.FirstIndex = len(rf.logs)-1
 
+            rf.persist()
+
         }else{
             reply.Success = false
             //找到第一个冲突的条目,就是找到 leader的索引 所在的follower 的索引的的任期中最小的索引，然后返回这个索引和任期
             lastConsistTerm := rf.logs[args.PrevLogIndex].Term
             lastConsistIdx := 1
-            for i := args.PrevLogIndex; i>0; i-- {
+            for i := args.PrevLogIndex-1; i>0; i-- {
                 if  rf.logs[i].Term != lastConsistTerm{
                 //如果发现任期不同，就说明到头了，迭代到了上一个任期，然后返回上个索引
                     lastConsistIdx = i+1
                     break
                 }
             }
-            reply.FirstIndex = lastConsistTerm
-            reply.ConflictTerm = lastConsistIdx
+            reply.FirstIndex = lastConsistIdx 
+            reply.ConflictTerm = lastConsistTerm
         }
     }else{
+
        //如果leader的日志比我长，那我直接发送最后一个日志索引和任期，让leader去找最后日志一致的地方，leader会找到最后一致的任期，更新next_index 然后从那个地方重新开始同步日志过来。
         reply.Success = false
         reply.FirstIndex = len(rf.logs)
@@ -458,6 +470,7 @@ func (rf *Raft)ApplyLogEntryDaemon(){
             }
             rf.applyCh <- applyMsg
             DPrintf("[%d-%s]:  send applyMsg to  applyCh  at term %d, applyMsg: %+v", rf.me, rf, rf.currentTerm, applyMsg)
+            rf.persist()
         }
     }
 
@@ -538,7 +551,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
     case <- rf.done:
         return index, term, isLeader
     default:
-            
         rf.mu.Lock()
         defer rf.mu.Unlock()
         if rf.state == Leader{
@@ -550,6 +562,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
             isLeader = true
             rf.nextIndex[rf.me] = index+1
             rf.matchIndex[rf.me] = index
+            
+            //这里是否有rf.persist的必要性，persist 是否能够保证正确的恢复日志，保证日志一致性
+            rf.persist()
         }
 
     }
@@ -599,38 +614,59 @@ func (rf *Raft) sendHeartbeat(id int) {
 
     rf.mu.Lock()
     defer rf.mu.Unlock()
-    DPrintf("[%d-%s] send Heartbeat to  peers[%d] at term %d", rf.me, rf, id, rf.currentTerm)
 
     if rf.state != Leader{
         DPrintf("[%d-%s]: peer think he is not leader then return  %d",  rf.me, rf, rf.currentTerm)
         return
     }
     
-    DPrintf("sendHeartbeat: rf.nextIndex[id] is : %d", rf.nextIndex[id])
-    args := &AppendEntriesArgs{}
-    args.Term = rf.currentTerm
-    args.LeaderId = rf.me
-    args.Entries = nil
-    args.PrevLogIndex = rf.nextIndex[id]-1
-    args.PrevLogTerm = rf.logs[rf.nextIndex[id]-1].Term
-    args.LeaderCommit = rf.commitIndex
+    DPrintf("sendHeartbeat: [%d-%s] send Heartbeat to  peers[%d] at term %d rf.nextIndex[id] is : %d",rf.me, rf, id, rf.currentTerm, rf.nextIndex[id])
+   
 
-    //这里send 发送心跳应该用go 程去做，不然网络卡顿，会引起自己这边的超时
-    //ok := rf.sendAppendEntries(id, args, reply)
+    //BUG  rf.nextIndex[id] = 0, 所以 rf.nextIndex[id]-1 会出现0-1的错误，这里的日志长度莫名的变为0 很奇怪
 
-    //如果
-    if rf.nextIndex[id] < len(rf.logs){
-        args.Entries = append(args.Entries, rf.logs[rf.nextIndex[id]:]...)
-    }
+    pre := rf.nextIndex[id] - 1
 
-    go func() {
-        reply := &AppendEntriesReply{}
-        if rf.sendAppendEntries(id, args, reply){
-            rf.checkConsistencyByReply(id,reply)
-        }else{
-            DPrintf("[%d-%s] failed to send Heartbeat to  peers[%d] at term %d", rf.me, rf, id, rf.currentTerm)
+    if pre < 0 {
+
+    }else{
+
+        var args = AppendEntriesArgs{
+            Term:         rf.currentTerm,
+            LeaderId:     rf.me,
+            PrevLogIndex: pre,
+            PrevLogTerm:  rf.logs[pre].Term,
+            Entries:      nil,
+            LeaderCommit: rf.commitIndex,
         }
-    }()
+
+        // args := &AppendEntriesArgs{}
+        // args.Term = rf.currentTerm
+        // args.LeaderId = rf.me
+        // args.Entries = nil
+        // args.PrevLogIndex = pre
+        // DPrintf("sendHeartbeat:  pre is : %d", pre)
+        // DPrintf("sendHeartbeat:  pre logs is : %d", rf.logs[pre])
+        // args.PrevLogTerm = rf.logs[pre].Term
+        // args.LeaderCommit = rf.commitIndex
+
+        //这里send 发送心跳应该用go 程去做，不然网络卡顿，会引起自己这边的超时
+        //ok := rf.sendAppendEntries(id, args, reply)
+
+        //如果
+        if rf.nextIndex[id] < len(rf.logs){
+            args.Entries = append(args.Entries, rf.logs[rf.nextIndex[id]:]...)
+        }
+
+        go func() {
+            reply := &AppendEntriesReply{}
+            if rf.sendAppendEntries(id, &args, reply){
+                rf.checkConsistencyByReply(id,reply)
+            }else{
+                DPrintf("[%d-%s] failed to send Heartbeat to  peers[%d] at term %d", rf.me, rf, id, rf.currentTerm)
+            }
+        }()
+    }
 }
 
 
@@ -647,14 +683,18 @@ func(rf *Raft)updateCommitIndex(){
     sort.Ints(copyMacthIndex)
 
     //因为是从小到大排序，所以只要大于中位值，就相当于大于一半的节点的machIndex
-    target :=copyMacthIndex[len(rf.peers)/2]
+    target := copyMacthIndex[len(rf.peers)/2]
+    
+    if rf.commitIndex < target  && target>0{
 
-    if rf.commitIndex < target && rf.logs[target].Term == rf.currentTerm{
-        rf.commitIndex = target
-        go func() { rf.commitCond.Broadcast() }()
-    }else{
-        DPrintf("[%d-%s]: leader %d update commit index %d failed (log term %d != current Term %d)\n",
-                rf.me, rf, rf.me, rf.commitIndex, rf.logs[target], rf.currentTerm)
+        if rf.logs[target].Term == rf.currentTerm{
+
+            rf.commitIndex = target
+            go func() { rf.commitCond.Broadcast() }()
+        }else{
+            DPrintf("[%d-%s]: leader %d update commit index %d failed (log term %d != current Term %d)\n",
+                    rf.me, rf, rf.me, rf.commitIndex, rf.logs[target], rf.currentTerm)
+        }
     }
 
 
@@ -685,6 +725,7 @@ func (rf *Raft)checkConsistencyByReply(id int,reply *AppendEntriesReply) {
         if rf.state==Leader && rf.currentTerm < reply.Term{
             rf.turnToFollower()
             rf.resetElection <- struct{}{}
+            rf.persist()
             return
         }
 
@@ -767,6 +808,7 @@ func (rf * Raft)canvassVotes() {
 
                 //如果在turnToFollower里再加锁，这里会变为死锁，因为上面已经加锁了
                 rf.turnToFollower()
+                rf.persist()
 
                 //重置选举时间，返回函数
                 rf.resetElection <- struct{}{}
@@ -922,6 +964,7 @@ func (rf *Raft)electionDaemon() {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 
+
 	rf := &Raft{}
 
 	rf.peers = peers
@@ -973,6 +1016,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+
+    DPrintf("Make: [%d-%s]: peer start at term %d",  rf.me, rf, rf.currentTerm)
 
 	return rf
 }
