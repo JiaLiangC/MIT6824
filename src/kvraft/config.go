@@ -200,6 +200,8 @@ func (cfg *config) partition(p1 []int, p2 []int) {
 // Create a clerk with clerk specific server names.
 // Give it connections to all of the servers, but for
 // now enable only connections to servers in to[].
+
+//创建客户端 Clerk, 并且和所有的其他server都建立连接，但是把它只和to 中指定的server的网络联通
 func (cfg *config) makeClient(to []int) *Clerk {
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()

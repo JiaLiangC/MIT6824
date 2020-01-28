@@ -42,6 +42,7 @@ func check(cfg *config, t *testing.T, ck *Clerk, key string, value string) {
 }
 
 // a client runs the function f and then signals it is done
+//创建一个 clerk client 然后用它执行传入的函数fn, 然后删除这个clerk client
 func run_client(t *testing.T, cfg *config, me int, ca chan bool, fn func(me int, ck *Clerk, t *testing.T)) {
 	ok := false
 	defer func() { ca <- ok }()
@@ -52,6 +53,7 @@ func run_client(t *testing.T, cfg *config, me int, ca chan bool, fn func(me int,
 }
 
 // spawn ncli clients and wait until they are all done
+//启动一批 clerk client ,执行函数fn然后等待它们都结束
 func spawn_clients_and_wait(t *testing.T, cfg *config, ncli int, fn func(me int, ck *Clerk, t *testing.T)) {
 	ca := make([]chan bool, ncli)
 	for cli := 0; cli < ncli; cli++ {
@@ -189,32 +191,39 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		clnts[i] = make(chan int)
 	}
 	for i := 0; i < 3; i++ {
-		// log.Printf("Iteration %v\n", i)
+		log.Printf("Iteration %v\n", i)
 		atomic.StoreInt32(&done_clients, 0)
 		atomic.StoreInt32(&done_partitioner, 0)
+
+		//启动一批clerk client 执行 下面的函数，等到函数都执行完毕就返回ok
 		go spawn_clients_and_wait(t, cfg, nclients, func(cli int, myck *Clerk, t *testing.T) {
 			j := 0
 			defer func() {
+				log.Printf("test: send to clients clnts[cli] <- j success\n")
 				clnts[cli] <- j
 			}()
 			last := ""
 			key := strconv.Itoa(cli)
 			Put(cfg, myck, key, last)
+			log.Printf("test: %d: Put to clients success key is %s  value is %s. \n",cli,key,last)
 			for atomic.LoadInt32(&done_clients) == 0 {
 				if (rand.Int() % 1000) < 500 {
 					nv := "x " + strconv.Itoa(cli) + " " + strconv.Itoa(j) + " y"
-					// log.Printf("%d: client new append %v\n", cli, nv)
+					log.Printf("test:  %d: client new append %v\n", cli, nv)
 					Append(cfg, myck, key, nv)
 					last = NextValue(last, nv)
 					j++
 				} else {
-					// log.Printf("%d: client new get %v\n", cli, key)
+					log.Printf("test:  %d: client new get %v\n", cli, key)
 					v := Get(cfg, myck, key)
+					log.Printf("test:   %d: client new get %v, valueis %s. \n", cli, key, v)
 					if v != last {
 						log.Fatalf("get wrong value, key %v, wanted:\n%v\n, got\n%v\n", key, last, v)
 					}
 				}
+				log.Printf("test: for atomic.LoadInt32(&done_clients) FOR: \n")
 			}
+			log.Printf("test: break off FOR: \n")
 		})
 
 		if partitions {
@@ -228,7 +237,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		atomic.StoreInt32(&done_partitioner, 1) // tell partitioner to quit
 
 		if partitions {
-			// log.Printf("wait for partitioner\n")
+			log.Printf("wait for partitioner\n")
 			<-ch_partitioner
 			// reconnect network and submit a request. A client may
 			// have submitted a request in a minority.  That request
@@ -240,14 +249,14 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		}
 
 		if crash {
-			// log.Printf("shutdown servers\n")
+			log.Printf("shutdown servers\n")
 			for i := 0; i < nservers; i++ {
 				cfg.ShutdownServer(i)
 			}
 			// Wait for a while for servers to shutdown, since
 			// shutdown isn't a real crash and isn't instantaneous
 			time.Sleep(electionTimeout)
-			// log.Printf("restart servers\n")
+			log.Printf("restart servers\n")
 			// crash and re-start all
 			for i := 0; i < nservers; i++ {
 				cfg.StartServer(i)
@@ -257,14 +266,17 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 
 		// log.Printf("wait for clients\n")
 		for i := 0; i < nclients; i++ {
-			// log.Printf("read from clients %d\n", i)
+			log.Printf("read from clients %d\n", i)
 			j := <-clnts[i]
+			log.Printf("test: read from clients success\n")
+
 			// if j < 10 {
 			// 	log.Printf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
 			// }
 			key := strconv.Itoa(i)
-			// log.Printf("Check %v for client %d\n", j, i)
+			log.Printf("Check %v for client %d\n", j, i)
 			v := Get(cfg, ck, key)
+			log.Printf("checkClntAppends  for client[%d] key:%s   value:%s \n",i,key, v)
 			checkClntAppends(t, i, v, j)
 		}
 

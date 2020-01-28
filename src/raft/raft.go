@@ -104,15 +104,72 @@ const(
     Follower
 )
 
+//
+// example RequestVote RPC arguments structure.
+// field names must start with capital letters!
+//
+type RequestVoteArgs struct {
+    // Your data here (2A, 2B).
+    Term        int //候选人的任期号
+    CandidateId int //请求投票的候选人 id
+
+    /*----------Replication LOG split------*/
+    LastLogIndex int //候选人的最后⽇志条⽬的索引值
+    LastLogTerm int //候选人的最后⽇志条⽬的任期
+}
+
+// example RequestVote RPC reply structure.
+// field names must start with capital letters!
+//
+type RequestVoteReply struct {
+    // Your data here (2A).
+    Term        int
+    VoteGranted bool
+}
+
+type AppendEntriesArgs struct {
+    Term     int   //leader 的任期数
+    LeaderId int   //leader id
+    Entries  []LogEntry //日志项，为空则做心跳
+
+    /*----------Replication LOG split------*/
+    PrevLogIndex int //要同步的日志的前一个日志的索引，如果没有数据同步，就是最后一个日志索引
+    PrevLogTerm int   //要同步的日志的前一个日志的任期
+    LeaderCommit int   //领导人已经提交的⽇日志的索引值
+}
+
+type AppendEntriesReply struct {
+    Term    int //节点的currentTerm
+    Success bool
+    FirstIndex int
+    ConflictTerm int
+}
+
+
+type InstallSnapshotsArgs struct{
+    Term    int        //leader 任期号
+    LeaderId    int     //leader id,方便follower重定向请求
+    LastIncludedIndex    int // 快照中包含的最后的条目的日志索引
+    LastIncludedTerm    int //快照中包含的最后的条目的日志任期
+    Offset              int //快照的偏移量
+    Data              []int //数据
+    Done                bool //是否发送完毕
+}
+
+
+type InstallSnapshotsReply struct{
+    Term     int        //接受者自己的当前任期号
+}
+
+
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-	var term int
-	var isleader bool
 	// Your code here (2A).
     rf.mu.Lock()
     defer rf.mu.Unlock()
-
+    var term int
+    var isleader bool
 	term = rf.currentTerm
 	isleader = rf.state == Leader
     DPrintf("[%d-%s]: isleader return: %t at term %d \n", rf.me, rf, isleader, rf.currentTerm)
@@ -173,46 +230,7 @@ func (rf *Raft) readPersist(data []byte) {
 
 }
 
-//
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-//
-type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
-	Term        int //候选人的任期号
-	CandidateId int //请求投票的候选人 id
 
-    /*----------Replication LOG split------*/
-    LastLogIndex int //候选人的最后⽇志条⽬的索引值
-    LastLogTerm int //候选人的最后⽇志条⽬的任期
-}
-
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
-//
-type RequestVoteReply struct {
-	// Your data here (2A).
-	Term        int
-	VoteGranted bool
-}
-
-type AppendEntriesArgs struct {
-	Term     int   //leader 的任期数
-	LeaderId int   //leader id
-	Entries  []LogEntry //日志项，为空则做心跳
-
-    /*----------Replication LOG split------*/
-    PrevLogIndex int //要同步的日志的前一个日志的索引，如果没有数据同步，就是最后一个日志索引
-    PrevLogTerm int   //要同步的日志的前一个日志的任期
-    LeaderCommit int   //领导人已经提交的⽇日志的索引值
-}
-
-type AppendEntriesReply struct {
-	Term    int //节点的currentTerm
-	Success bool
-    FirstIndex int
-    ConflictTerm int
-}
 //这个实现中最重要的两个RPC，请求投票RPC 和 心跳RPC。
 
 
@@ -324,7 +342,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
         return
     }
 
-    DPrintf("[%d-%s]:  receive heartbeat from peer[%d] at term %d.  Entries: %+v", rf.me, rf, args.LeaderId, rf.currentTerm, args.Entries)
+    //DPrintf("[%d-%s]:  receive heartbeat from peer[%d] at term %d.  Entries: %+v", rf.me, rf, args.LeaderId, rf.currentTerm, args.Entries)
 
     //这里如果把state 判断放在前面就会被错误的请求给重置身份
     //所以放在过滤错误请求后
@@ -343,7 +361,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
     //这里leader 不会发送心跳给自己，除非是其他的成员给自己发送心跳，并且任期比自己大，就转变为 Follower
     //候选者收到任期大于等于自己leader的心跳，就承认，并且转为follower
-    if  args.Term >= rf.currentTerm && rf.state == Candidate {
+
+    //重置过期的leader
+    if  rf.state == Leader  {
         rf.turnToFollower()
     }
 
@@ -370,7 +390,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
     //如果leader 的 日志比自己的短， 这里为啥不是 len(rf.logs -1)还有待学习
     //1<=1，第一次日志的时候
     if args.PrevLogIndex < len(rf.logs){
-        DPrintf("[%d-%s]: receive log at term %d，args.PrevLogIndex： %d, args.PrevLogTerm: %d, %d", rf.me, rf, rf.currentTerm, args.PrevLogIndex,args.PrevLogTerm, rf.logs[args.PrevLogIndex].Term)
+        //DPrintf("[%d-%s]: receive log at term %d，args.PrevLogIndex： %d, args.PrevLogTerm: %d, %d", rf.me, rf, rf.currentTerm, args.PrevLogIndex,args.PrevLogTerm, rf.logs[args.PrevLogIndex].Term)
 
         //，args.PrevLogIndex 3  args.PrevLogTerm 10, rf.logs[args.PrevLogIndex].Term 10 8
 
@@ -383,7 +403,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
             rf.logs = rf.logs[:args.PrevLogIndex+1]
             rf.logs = append(rf.logs, args.Entries...)
-            DPrintf("[%d-%s]: rf.logs is  %+v",rf.me, rf, rf.logs)
+            //DPrintf("[%d-%s]: rf.logs is  %+v",rf.me, rf, rf.logs)
 
             //如果领导人的commitIndex(最后一个提交的日志的索引)大于自己的，那么说明日志更新正常，然后更新自己的索引
             //更新为 leader的  args.LeaderCommit 和 follower的最新的索引中的比较小的那一个
@@ -421,7 +441,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
         reply.ConflictTerm = rf.logs[len(rf.logs)-1].Term
     }
     
-    DPrintf("[%d-%s]:  send reset ElectionTimer signal at heartbeat at term %d", rf.me, rf, rf.currentTerm)
+    //DPrintf("[%d-%s]:  send reset ElectionTimer signal at heartbeat at term %d", rf.me, rf, rf.currentTerm)
 }
 
 
@@ -620,7 +640,7 @@ func (rf *Raft) sendHeartbeat(id int) {
         return
     }
     
-    DPrintf("sendHeartbeat: [%d-%s] send Heartbeat to  peers[%d] at term %d rf.nextIndex[id] is : %d",rf.me, rf, id, rf.currentTerm, rf.nextIndex[id])
+    //DPrintf("sendHeartbeat: [%d-%s] send Heartbeat to  peers[%d] at term %d rf.nextIndex[id] is : %d",rf.me, rf, id, rf.currentTerm, rf.nextIndex[id])
    
 
     //BUG  rf.nextIndex[id] = 0, 所以 rf.nextIndex[id]-1 会出现0-1的错误，这里的日志长度莫名的变为0 很奇怪
@@ -712,7 +732,7 @@ func (rf *Raft)checkConsistencyByReply(id int,reply *AppendEntriesReply) {
 
     if reply.Success{
         // RPC and consistency check successful
-         DPrintf("[%d-%s] receive Heartbeat reply update matchIndex, reply.FirstIndex %d",rf.me, rf,  reply.FirstIndex)
+         //DPrintf("[%d-%s] receive Heartbeat reply update matchIndex, reply.FirstIndex %d",rf.me, rf,  reply.FirstIndex)
         //日志发送成功，那么leader 更新已经同步的list matchIndex 中对应的值为，follower返回的其最新的日志的index
         //更新对应的nextIndex 为follower最新的日志索引值+1
         rf.matchIndex[id] = reply.FirstIndex
@@ -796,49 +816,49 @@ func (rf * Raft)canvassVotes() {
     //处理投票RPC 返回的结果
     replyHandler := func(reply *RequestVoteReply){
         //那么就令 currentTerm 等于 T，并切换状态为跟随者
-        rf.mu.Lock()
-        defer rf.mu.Unlock()
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
 
-        if rf.state == Candidate{
-            if reply.Term > rqVoteargs.Term{
-                //选举时如果对方的任期比自己大就返回
-                rf.currentTerm = reply.Term
-            // if reply.Term > rf.currentTerm{
-                //如果收到的请求投票RPC 对方返回的Term大于自己的Term ，说明自己过期了，转变为follower
+    if rf.state == Candidate{
+        if reply.Term > rqVoteargs.Term{
+            //选举时如果对方的任期比自己大就返回
+            rf.currentTerm = reply.Term
+        // if reply.Term > rf.currentTerm{
+            //如果收到的请求投票RPC 对方返回的Term大于自己的Term ，说明自己过期了，转变为follower
 
-                //如果在turnToFollower里再加锁，这里会变为死锁，因为上面已经加锁了
-                rf.turnToFollower()
-                rf.persist()
+            //如果在turnToFollower里再加锁，这里会变为死锁，因为上面已经加锁了
+            rf.turnToFollower()
+            rf.persist()
 
-                //重置选举时间，返回函数
-                rf.resetElection <- struct{}{}
-                DPrintf("[%d-%s]:   reply term: %d bigger then  rf's term: %d  turns to follower\n", rf.me, rf,  reply.Term, rf.currentTerm)
+            //重置选举时间，返回函数
+            rf.resetElection <- struct{}{}
+            DPrintf("[%d-%s]:   reply term: %d bigger then  rf's term: %d  turns to follower\n", rf.me, rf,  reply.Term, rf.currentTerm)
+            return
+        }
+
+        //如果对方返回的任期小于等于自己
+        if reply.VoteGranted {
+            //if receivedVotesCnt > len(rf.peers)/2{
+            //这里原来写的是大于，如果只有3个节点，会出现获得1票无法胜出
+            if receivedVotesCnt == len(rf.peers)/2{
+            //选举成功，变为leader，退出循环激活心跳go程
+
+                //这里成为leader 后，因为Leader中发出心跳要等到 HeartBeat定时器到期才会发第一次心跳，这时候会耽误自己，
+                //导致自己的选举定时器过期。同时导致其他节点没有收到心跳，过期。任期变大开始新的一轮选举，导致本次选举失效。
+                //所以这里应该在 heartbeatDaemon 中第一时间重置electiontimer 并且发心跳
+                rf.state = Leader
+
+                //选举成功后，设置nextIndex 和 matchedIndex
+                rf.resetAfterElectionSuccess()
+                DPrintf("[%d-%s]: peer %d become new leader. at term %d \n", rf.me, rf, rf.me, rf.currentTerm)
+                
+                //开启leader的心跳守护进程，开始给follower 发送心跳
+                go rf.heartbeatDaemon()
                 return
             }
-
-            //如果对方返回的任期小于等于自己
-            if reply.VoteGranted {
-                //if receivedVotesCnt > len(rf.peers)/2{
-                //这里原来写的是大于，如果只有3个节点，会出现获得1票无法胜出
-                if receivedVotesCnt == len(rf.peers)/2{
-                //选举成功，变为leader，退出循环激活心跳go程
-
-                    //这里成为leader 后，因为Leader中发出心跳要等到 HeartBeat定时器到期才会发第一次心跳，这时候会耽误自己，
-                    //导致自己的选举定时器过期。同时导致其他节点没有收到心跳，过期。任期变大开始新的一轮选举，导致本次选举失效。
-                    //所以这里应该在 heartbeatDaemon 中第一时间重置electiontimer 并且发心跳
-                    rf.state = Leader
-
-                    //选举成功后，设置nextIndex 和 matchedIndex
-                    rf.resetAfterElectionSuccess()
-                    DPrintf("[%d-%s]: peer %d become new leader. at term %d \n", rf.me, rf, rf.me, rf.currentTerm)
-                    
-                    //开启leader的心跳守护进程，开始给follower 发送心跳
-                    go rf.heartbeatDaemon()
-                    return
-                }
-                receivedVotesCnt += 1
-            }
+            receivedVotesCnt += 1
         }
+    }
     }
 
 
@@ -942,7 +962,7 @@ func (rf *Raft)electionDaemon() {
                 <-rf.electionTimer.C
             }
             rf.electionTimer.Reset(rf.electionTimeOutDuration)
-            DPrintf("[%d-%s]: peer reset electionTimer at term %d",  rf.me, rf, rf.currentTerm)
+            //DPrintf("[%d-%s]: peer reset electionTimer at term %d",  rf.me, rf, rf.currentTerm)
         case <- rf.electionTimer.C:
             //electionTimer 过期，触发选举
             DPrintf("[%d-%s]election timeout, issue election @ term %d\n",
@@ -993,7 +1013,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
     rf.done = make(chan interface{})
 
     //发送心跳的定时器间隔
-    rf.heartbeatTimerInterval = time.Millisecond*100
+    rf.heartbeatTimerInterval = time.Millisecond*50
 
     //初始化选举定时器的间隔
     rf.electionTimeOutDuration = time.Duration(randTimeOut())*time.Millisecond
