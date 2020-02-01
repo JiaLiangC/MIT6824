@@ -84,13 +84,13 @@ func (ck *Clerk) Get(key string) string {
 
 		requestResponse := make(chan bool, 1)
 		ck.LeaderId %= server_cnt
-		DPrintf("Client:[%d]:GET LeaderId is %d", ck.ClientId, ck.LeaderId)
+		//DPrintf("Client:[%d]:GET LeaderId is %d", ck.ClientId, ck.LeaderId)
 
 		go func() {
-			DPrintf("Client:[%d]: send RPC to Server:[%d]. OP:GET  Key:%s \n", ck.ClientId, ck.LeaderId, key)
+			// DPrintf("Client:[%d]: send RPC to Server:[%d]. OP:GET  Key:%s \n", ck.ClientId, ck.LeaderId, key)
 			ok := ck.servers[ck.LeaderId].Call("KVServer.Get", args, reply)
 			requestResponse <- ok
-			DPrintf("Client:[%d]:  received RPC response from server %d .  OP:GET  key:%s \n", ck.ClientId, ck.LeaderId, key)
+			// DPrintf("Client:[%d]:  received RPC response from server %d .  OP:GET  key:%s \n", ck.ClientId, ck.LeaderId, key)
 		}()
 
 		//select 一直阻塞，直到触发一个通道
@@ -100,12 +100,12 @@ func (ck *Clerk) Get(key string) string {
 				ck.LeaderId+=1
 				continue
 			case ok:= <-requestResponse:
-				DPrintf("Client:[%d]: Client  GET requestResponse, LeaderId: %d,  WrongLeader: %v ", ck.ClientId, ck.LeaderId, reply.WrongLeader)
+				// DPrintf("Client:[%d]: Client  GET requestResponse, LeaderId: %d,  WrongLeader: %v ", ck.ClientId, ck.LeaderId, reply.WrongLeader)
 				if ok && !reply.WrongLeader{
-					DPrintf("Client:[%d]: Client  GET requestResponse, LeaderId: %d,  WrongLeader: %v ", ck.ClientId, ck.LeaderId, reply.WrongLeader)
-					ck.SeqNo+=1
+					// DPrintf("Client:[%d]: Client  GET requestResponse, LeaderId: %d,  WrongLeader: %v ", ck.ClientId, ck.LeaderId, reply.WrongLeader)
 					if reply.Err == OK {
-						DPrintf("Client:[%d]: Client  GET requestResponse success, WrongLeader: %v LeaderId: %d, key is: %s value is %s", ck.ClientId, reply.WrongLeader, ck.LeaderId,key, reply.Value)
+						ck.SeqNo+=1
+						DPrintf("Client:[%d]: Client  GET requestResponse success, WrongLeader: %v LeaderId: %d, key is: %s value is %s, ck.SeqNo:%d", ck.ClientId, reply.WrongLeader, ck.LeaderId,key, reply.Value, ck.SeqNo)
 						return reply.Value
 					}
 					//这里为啥返回空
@@ -157,7 +157,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		select{
 			case <-time.After(200*time.Millisecond):
 				ck.LeaderId+=1
-				DPrintf("Client:[%d]: PutAppend Client  receive cmd from server %d . OP: %s .WrongLeader: %v \n", ck.ClientId, ck.LeaderId, op, reply.WrongLeader)
+				DPrintf("Client:[%d]: PutAppend Client  timeOut from server %d . OP: %s .WrongLeader: %v \n", ck.ClientId, ck.LeaderId, op, reply.WrongLeader)
 				continue
 			case ok:= <-requestResponse:
 				DPrintf("Client:[%d]: PutAppend Client  requestResponse  receive cmd from server %d . OP: %s .WrongLeader: %v \n", ck.ClientId, ck.LeaderId, op, reply.WrongLeader)

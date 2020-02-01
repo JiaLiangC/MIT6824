@@ -620,8 +620,10 @@ func TestSnapshotRPC3B(t *testing.T) {
 	check(cfg, t, ck, "a", "A")
 
 	// a bunch of puts into the majority partition.
+	//把服务器隔离分成两个分区 0,1 一个， 2一个
 	cfg.partition([]int{0, 1}, []int{2})
 	{
+		log.Printf("TestSnapshotRPC3B: partition created\n")
 		ck1 := cfg.makeClient([]int{0, 1})
 		for i := 0; i < 50; i++ {
 			Put(cfg, ck1, strconv.Itoa(i), strconv.Itoa(i))
@@ -638,19 +640,34 @@ func TestSnapshotRPC3B(t *testing.T) {
 
 	// now make group that requires participation of
 	// lagging server, so that it has to catch up.
+
+
 	cfg.partition([]int{0, 2}, []int{1})
 	{
+		log.Printf("TestSnapshotRPC3B: partition 2 \n")
 		ck1 := cfg.makeClient([]int{0, 2})
 		Put(cfg, ck1, "c", "C")
+		log.Printf("TestSnapshotRPC3B: Put C finish\n")
+
 		Put(cfg, ck1, "d", "D")
+		log.Printf("TestSnapshotRPC3B: Put d finish\n")
+
 		check(cfg, t, ck1, "a", "A")
+		log.Printf("TestSnapshotRPC3B: check a finish\n")
+
 		check(cfg, t, ck1, "b", "B")
+		log.Printf("TestSnapshotRPC3B: check b finish\n")
+
 		check(cfg, t, ck1, "1", "1")
+		log.Printf("TestSnapshotRPC3B: check 1 finish\n")
+
 		check(cfg, t, ck1, "49", "49")
+		log.Printf("TestSnapshotRPC3B: check 49 finish\n")
 	}
 
 	// now everybody
 	cfg.partition([]int{0, 1, 2}, []int{})
+	log.Printf("TestSnapshotRPC3B: partition released \n")
 
 	Put(cfg, ck, "e", "E")
 	check(cfg, t, ck, "c", "C")

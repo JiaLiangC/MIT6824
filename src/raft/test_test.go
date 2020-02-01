@@ -14,6 +14,7 @@ import "time"
 import "math/rand"
 import "sync/atomic"
 import "sync"
+import "log"
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -760,6 +761,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
+		log.Printf("TestFigure8Unreliable2C:  iters is %d \n",iters)
 		if iters == 200 {
 			cfg.setlongreordering(true)
 		}

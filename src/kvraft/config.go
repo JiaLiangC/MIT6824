@@ -4,7 +4,7 @@ import "labrpc"
 import "testing"
 import "os"
 
-// import "log"
+import "log"
 import crand "crypto/rand"
 import "math/big"
 import "math/rand"
@@ -186,13 +186,18 @@ func (cfg *config) ConnectAll() {
 func (cfg *config) partition(p1 []int, p2 []int) {
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
-	// log.Printf("partition servers into: %v %v\n", p1, p2)
+	log.Printf("partition servers into: %v %v\n", p1, p2)
 	for i := 0; i < len(p1); i++ {
+		//把p1 list中的服务和p2中的都断开
 		cfg.disconnectUnlocked(p1[i], p2)
+
+		//把p1 list中的服务和p1中的都互相连通
 		cfg.connectUnlocked(p1[i], p1)
 	}
 	for i := 0; i < len(p2); i++ {
+		//p2 list的服务和p1断开
 		cfg.disconnectUnlocked(p2[i], p1)
+		//p2中的服务和p2
 		cfg.connectUnlocked(p2[i], p2)
 	}
 }

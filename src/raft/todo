@@ -1,3 +1,25 @@
+LAB-3B:
+ 当Kv server启动时和raft一样read snapshot
+ 当raft 存储的 maxraftstate 超过KV server设置的阈值时，KV server开始触发snapshot
+ 先给KV server 做一个快照(保存DB 和 history_request)
+ 然后在 applyDaemon 中 判断是否达到阈值，达到就给自己和rf做快照(保存元数据，截取删除日志)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 //各种需要状态变化和启动停止的地方设置 persist
 
 

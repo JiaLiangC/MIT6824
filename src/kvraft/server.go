@@ -6,6 +6,7 @@ import (
 	"log"
 	"raft"
 	"sync"
+	"bytes"
 )
 
 const Debug = 1
@@ -45,7 +46,9 @@ type KVServer struct {
 
 	agreementNotifyCh map[int] chan struct{}
 
+	snapshotIndex int
 
+	persister *raft.Persister
 
 	// Your definitions here.
 }
@@ -195,7 +198,17 @@ func (kv *KVServer) ApplyChDaemon() {
 			case msg,ok := <- kv.applyCh:
 				DPrintf("KVServer[%d]:ApplyChDaemon:-------------------",kv.me)
 				if ok {
-					if msg.Command !=nil && msg.CommandIndex > 0{
+					if !msg.CommandValid{
+						kv.mu.Lock()
+						//kv.restoreSnapshot(msg.Command.([]byte))
+						kv.readSnapshot(msg.Command.([]byte))
+						kv.generateSnapshot(msg.CommandIndex)
+						kv.mu.Unlock()
+						continue
+					}
+					//这里判断 msgCommandIndex 必须大于快照的索引
+					//if msg.Command !=nil && msg.CommandIndex > kv.snapshotIndex{
+					if msg.Command !=nil&& msg.CommandIndex > kv.snapshotIndex{
 						cmd := msg.Command.(Op)
 
 						kv.mu.Lock()
@@ -206,7 +219,7 @@ func (kv *KVServer) ApplyChDaemon() {
 							switch cmd.Op {
 								case "Get":
 									kv.historyRequest[cmd.ClientId] = &LatestReply{SeqNo: cmd.SeqNo,Reply: GetReply{Value: kv.dbPool[cmd.Key]}}
-									DPrintf("KVServer:[%d]:ApplyChDaemon server receive cmd: %v \n", kv.me, cmd)
+									//DPrintf("KVServer:[%d]:ApplyChDaemon server receive cmd: %v \n", kv.me, cmd)
 								case "Put":
 									kv.dbPool[cmd.Key] = cmd.Value
 									kv.historyRequest[cmd.ClientId] = &LatestReply{SeqNo: cmd.SeqNo}
@@ -214,18 +227,21 @@ func (kv *KVServer) ApplyChDaemon() {
 								case "Append":
 									kv.dbPool[cmd.Key] += cmd.Value
 									kv.historyRequest[cmd.ClientId] = &LatestReply{SeqNo: cmd.SeqNo}
-									DPrintf("KVServer:[%d]:ApplyChDaemon server receive cmd: %v \n", kv.me, cmd)
+									//DPrintf("KVServer:[%d]:ApplyChDaemon server receive cmd: %v \n", kv.me, cmd)
 								default:
 									DPrintf("KVServer:[%d]:ApplyChDaemon server %d receive invalid cmd: %v\n", kv.me, kv.me, cmd)
 									panic("invalid command operation")
 							}
 						}
 
+						//处理快照
+						kv.handleSnapshot(msg.CommandIndex)
+
 						if ch, ok:= kv.agreementNotifyCh[msg.CommandIndex]; ok && ch!=nil{
 							//关闭通道，删除map中的地址
 							close(ch)
 							delete(kv.agreementNotifyCh, msg.CommandIndex)
-							DPrintf("KVServer:[%d]: Request[%d] log agreement,and apply success to slef state machine",kv.me, cmd.SeqNo)
+							// DPrintf("KVServer:[%d]: Request[%d] log agreement,and apply success to slef state machine",kv.me, cmd.SeqNo)
 						}
 						DPrintf("KVServer:[%d]: Request[%d] log agreement,and apply success to slef state machine and finished, kvdb is : %v",kv.me, cmd.SeqNo, kv.dbPool)
 						kv.mu.Unlock()
@@ -239,6 +255,108 @@ func (kv *KVServer) ApplyChDaemon() {
 }
 
 
+func (kv *KVServer) handleSnapshot(index int){
+	if kv.maxraftstate < 0{
+		return
+	}
+
+	if kv.persister.RaftStateSize() < kv.maxraftstate*10/9 {
+		return 
+	}
+
+	DPrintf("KVServer:[%d]:handleSnapshot start snapshot kv.persister.RaftStateSize() > kv.maxraftstate*10/9(%d > %d)", kv.me, kv.persister.RaftStateSize(),  kv.maxraftstate*10/9)
+
+	kvSnapshotData := kv.GSnapshot(index)
+	kv.rf.TakeSnapshot(index, kvSnapshotData)
+}
+
+func (kv *KVServer)restoreSnapshot(data []byte) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if data==nil || len(data)<1{
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	kv.dbPool = make(map[string]string)
+
+	kv.historyRequest = make(map[int]*LatestReply) 
+
+    d.Decode(& kv.dbPool)
+    d.Decode(& kv.historyRequest)
+    d.Decode(& kv.snapshotIndex)
+	
+}
+
+
+func (kv *KVServer)generateSnapshot(index int) {
+	
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+	kv.snapshotIndex = index
+
+	e.Encode(kv.dbPool)
+	e.Encode(kv.historyRequest)
+    e.Encode(kv.snapshotIndex)
+    
+	data := w.Bytes()
+	kv.persister.SaveStateAndSnapshot(kv.persister.ReadRaftState(), data)
+	
+}
+
+
+
+func (kv *KVServer)readSnapshot(data []byte) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if data==nil || len(data)<1{
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	kv.dbPool = make(map[string]string)
+
+	kv.historyRequest = make(map[int]*LatestReply) 
+
+    d.Decode(& kv.dbPool)
+    d.Decode(& kv.historyRequest)
+    d.Decode(& kv.snapshotIndex)
+	
+}
+
+
+
+
+func (kv *KVServer)GSnapshot(index int) []byte{
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+	kv.snapshotIndex = index
+
+	e.Encode(kv.dbPool)
+	e.Encode(kv.historyRequest)
+    e.Encode(kv.snapshotIndex)
+    
+	data := w.Bytes()
+	return data
+	//kv.rf.SaveStateAndSnapshot(kv.rf.ReadRaftState(), data)
+
+}
+
+func (kv *KVServer)NewSnapshot() []byte{
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+	e.Encode(kv.dbPool)
+	e.Encode(kv.historyRequest)
+    e.Encode(kv.snapshotIndex)
+    
+	data := w.Bytes()
+	return data
+}
 
 //
 // servers[] contains the ports of the set of
@@ -265,6 +383,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
+	kv.persister = persister
 	kv.doneCh = make(chan struct{})
 
 	kv.dbPool = make(map[string]string)
@@ -274,6 +393,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.agreementNotifyCh = make(map[int] chan struct{})
 
 	kv.applyCh = make(chan raft.ApplyMsg)
+
+	//kv.restoreSnapshot(kv.persister.ReadSnapshot())
+	kv.readSnapshot(kv.persister.ReadSnapshot())
+
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	
