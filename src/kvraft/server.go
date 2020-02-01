@@ -46,6 +46,9 @@ type KVServer struct {
 
 	agreementNotifyCh map[int] chan struct{}
 
+	cacheRequest map[int]int
+
+
 	snapshotIndex int
 
 	persister *raft.Persister
@@ -141,6 +144,26 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 	}
 
+
+	SeqNo,ok := kv.cacheRequest[args.ClientId]
+
+	if !ok{
+		kv.cacheRequest[args.ClientId] = args.SeqNo
+	}else{
+		if args.SeqNo > SeqNo{
+			kv.cacheRequest[args.ClientId] = args.SeqNo
+		}else{
+			reply.WrongLeader = true
+			kv.mu.Unlock()
+			return
+		}
+	}
+
+	DPrintf("KVServer:[%d]: server received  PutAppend RPC Request,args.SeqNo:%d ,PutAppendArgs:%v \n", kv.me, args.SeqNo, args)
+
+
+
+
 	op := Op{Op: args.Op,Key: args.Key,Value: args.Value, ClientId: args.ClientId, SeqNo: args.SeqNo}
 	//commandIndex, term, isLeader := kv.rf.Start(op)
 	commandIndex, term, _ := kv.rf.Start(op)
@@ -196,7 +219,7 @@ func (kv *KVServer) ApplyChDaemon() {
 			case <- kv.doneCh:
 				return
 			case msg,ok := <- kv.applyCh:
-				DPrintf("KVServer[%d]:ApplyChDaemon:-------------------",kv.me)
+				DPrintf("KVServer[%d]:ApplyChDaemon:-------------------%v",kv.me,msg)
 				if ok {
 					if !msg.CommandValid{
 						kv.mu.Lock()
@@ -227,7 +250,7 @@ func (kv *KVServer) ApplyChDaemon() {
 								case "Append":
 									kv.dbPool[cmd.Key] += cmd.Value
 									kv.historyRequest[cmd.ClientId] = &LatestReply{SeqNo: cmd.SeqNo}
-									//DPrintf("KVServer:[%d]:ApplyChDaemon server receive cmd: %v \n", kv.me, cmd)
+									DPrintf("KVServer:[%d]:ApplyChDaemon server receive cmd: %v \n", kv.me, cmd)
 								default:
 									DPrintf("KVServer:[%d]:ApplyChDaemon server %d receive invalid cmd: %v\n", kv.me, kv.me, cmd)
 									panic("invalid command operation")
@@ -235,6 +258,7 @@ func (kv *KVServer) ApplyChDaemon() {
 						}
 
 						//处理快照
+						DPrintf("KVServer:[%d]:ApplyChDaemon server receive cmd: %v \n", kv.me, cmd)
 						kv.handleSnapshot(msg.CommandIndex)
 
 						if ch, ok:= kv.agreementNotifyCh[msg.CommandIndex]; ok && ch!=nil{
@@ -393,6 +417,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.agreementNotifyCh = make(map[int] chan struct{})
 
 	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.cacheRequest = make(map[int]int)
 
 	//kv.restoreSnapshot(kv.persister.ReadSnapshot())
 	kv.readSnapshot(kv.persister.ReadSnapshot())

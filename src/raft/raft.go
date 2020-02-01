@@ -665,7 +665,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
             //如果领导人的commitIndex(最后一个提交的日志的索引)大于自己的，那么说明日志更新正常，然后更新自己的索引
             //更新为 leader的  args.LeaderCommit 和 follower的最新的索引中的比较小的那一个
+            
+            DPrintf("[%d-%s]:AppendEntries:success receive log at term %d, args.LeaderCommit > rf.commitIndex:(%d > %d)",  rf.me, rf, rf.currentTerm,  args.LeaderCommit, rf.commitIndex)
             if  args.LeaderCommit > rf.commitIndex{
+                DPrintf("[%d-%s]:AppendEntries:success receive log at term %d, args.LeaderCommit > rf.commitIndex", rf.me, rf, rf.currentTerm)
                 //rf.commitIndex = min(args.LeaderCommit, len(rf.logs)-1)
                 rf.commitIndex = min(args.LeaderCommit, rf.lastIdx())
                 go func(){ rf.commitCond.Broadcast()}()
@@ -677,7 +680,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
             reply.ConflictTerm = rf.lastTerm()
             reply.FirstIndex = rf.lastIdx()
 
-            DPrintf("[%d-%s]:AppendEntries:success receive log at term %d，args.PrevLogIndex： %d, args.PrevLogTerm: %d, %d, reply.ConflictTerm:%d,  reply.FirstIndex:%d", rf.me, rf, rf.currentTerm, args.PrevLogIndex,args.PrevLogTerm, rf.logs[rf.subIdx(args.PrevLogIndex)].Term,reply.ConflictTerm , reply.FirstIndex)
+            DPrintf("[%d-%s]:AppendEntries:success receive log at term %d，args.PrevLogIndex： %d, args.PrevLogTerm: %d, %d, reply.ConflictTerm:%d,  reply.FirstIndex:%d,rf.commitIndex: %d ,Entries: %v", rf.me, rf, rf.currentTerm, args.PrevLogIndex,args.PrevLogTerm, rf.logs[rf.subIdx(args.PrevLogIndex)].Term,reply.ConflictTerm , reply.FirstIndex,rf.commitIndex, args.Entries)
 
             rf.persist()
 
@@ -736,7 +739,7 @@ func (rf *Raft)ApplyLogEntryDaemon(){
             default:
             }
         }
-        DPrintf("[%d-%s]:  in  ApplyLogEntryDaemon", rf.me, rf)
+        DPrintf("[%d-%s]:  in  ApplyLogEntryDaemon,rf.lastApplied:%d,rf.commitIndex:%d", rf.me, rf,rf.lastApplied,rf.commitIndex)
 
     //lastApplied < commitIndex , 更新 lastApplied = commitIndex  然后组装 ApplyMsg 信息，发送如 ApplyCh 通道，
     //因为applyMsg 的command 是单个命令，所以要根据日志长度发送多次，这里具体发送几次为 commitIndex-lastApplied 次数 
@@ -853,10 +856,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
         rf.mu.Lock()
         defer rf.mu.Unlock()
         if rf.state == Leader{
+            DPrintf("[%d-%s]:Start receive command from kvServer  at term %d, command: %v", rf.me, rf, rf.currentTerm,command)
+
             log := LogEntry{rf.currentTerm, command}
             rf.logs = append(rf.logs,log)
 
-            index = len(rf.logs)-1
+            //bugfix    index = len(rf.logs)-1
+            index = rf.lastIdx()
             term = rf.currentTerm
             isLeader = true
             rf.nextIndex[rf.me] = index+1
@@ -950,8 +956,8 @@ func (rf *Raft) sendHeartbeat(id int) {
         //BUG fix
         //if rf.nextIndex[id] < len(rf.logs)
         if rf.nextIndex[id] < len(rf.logs)+rf.lastIncludedIndex{
-            DPrintf("[%d-%s]send Heartbeat to peers[%d] at term %d rf.nextIndex[id]<rf.lastIdx()+1:%d < %d", rf.me, rf, id, rf.currentTerm, rf.nextIndex[id], len(rf.logs)+rf.lastIncludedIndex)
             args.Entries = append(args.Entries, rf.logs[rf.subIdx(rf.nextIndex[id]):]...)
+            DPrintf("[%d-%s]send Heartbeat to peers[%d] at term %d rf.nextIndex[id]<rf.lastIdx()+1:%d < %d, rf.commitIndex:%d ,Entries:%v", rf.me, rf, id, rf.currentTerm, rf.nextIndex[id], len(rf.logs)+rf.lastIncludedIndex, rf.commitIndex, args.Entries)
         }
 
         go func() {
@@ -984,12 +990,13 @@ func(rf *Raft)updateCommitIndex(){
     //因为是从小到大排序，所以只要大于中位值，就相当于大于一半的节点的machIndex
     target := copyMacthIndex[len(rf.peers)/2]
     
-    DPrintf("updateCommitIndex:[%d-%s]: leader start updated commitedIndex: %d \n", rf.me, rf, target)
+    DPrintf("updateCommitIndex:[%d-%s]: leader start updated commitedIndex: %d ,copyMacthIndex:%v \n", rf.me, rf, target,copyMacthIndex)
 
     //if rf.commitIndex < target  && target>0{
     if rf.commitIndex < target  && target>rf.lastIncludedIndex{
 
-        if rf.logs[target].Term == rf.currentTerm{
+        //bugfix if rf.logs[target].Term == rf.currentTerm{
+        if rf.logs[rf.subIdx(target)].Term == rf.currentTerm{
             rf.commitIndex = target
             DPrintf("updateCommitIndex:[%d-%s]: leader success updated commitedIndex: %d \n", rf.me, rf, target)
             go func() { rf.commitCond.Broadcast() }()
