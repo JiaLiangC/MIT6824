@@ -85,6 +85,21 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 	}
 
+
+	SeqNo,ok := kv.cacheRequest[args.ClientId]
+
+	if !ok{
+		kv.cacheRequest[args.ClientId] = args.SeqNo
+	}else{
+		if args.SeqNo > SeqNo{
+			kv.cacheRequest[args.ClientId] = args.SeqNo
+		}else{
+			reply.WrongLeader = true
+			kv.mu.Unlock()
+			return
+		}
+	}
+
 	op := Op{Op: "Get",Key: args.Key, ClientId: args.ClientId, SeqNo: args.SeqNo}
 	//commandIndex, term, isLeader := kv.rf.Start(op)
 	commandIndex, term, _ := kv.rf.Start(op)
@@ -144,7 +159,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 	}
 
-
 	SeqNo,ok := kv.cacheRequest[args.ClientId]
 
 	if !ok{
@@ -190,6 +204,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 				DPrintf("KVServer:[%d]: received success aggreement PutAppend Signal , WrongLeader:%v \n", kv.me,isLeader)
 				reply.WrongLeader = true
 				reply.Err = ""
+				//delete(kv.cacheRequest, args.ClientId)
 				return
 			}
 	}
@@ -225,7 +240,8 @@ func (kv *KVServer) ApplyChDaemon() {
 						kv.mu.Lock()
 						//kv.restoreSnapshot(msg.Command.([]byte))
 						kv.readSnapshot(msg.Command.([]byte))
-						kv.generateSnapshot(msg.CommandIndex)
+						kvSnapshotData := kv.NewSnapshot(msg.CommandIndex)
+						kv.persister.SaveStateAndSnapshot(kv.persister.ReadRaftState(), kvSnapshotData)
 						kv.mu.Unlock()
 						continue
 					}
@@ -267,7 +283,7 @@ func (kv *KVServer) ApplyChDaemon() {
 							delete(kv.agreementNotifyCh, msg.CommandIndex)
 							// DPrintf("KVServer:[%d]: Request[%d] log agreement,and apply success to slef state machine",kv.me, cmd.SeqNo)
 						}
-						DPrintf("KVServer:[%d]: Request[%d] log agreement,and apply success to slef state machine and finished, kvdb is : %v",kv.me, cmd.SeqNo, kv.dbPool)
+						DPrintf("KVServer:[%d]:ApplyChDaemon Request[%d] log agreement,and apply success to slef state machine and finished, kvdb is : %v",kv.me, cmd.SeqNo, kv.dbPool)
 						kv.mu.Unlock()
 					}
 
@@ -290,7 +306,7 @@ func (kv *KVServer) handleSnapshot(index int){
 
 	DPrintf("KVServer:[%d]:handleSnapshot start snapshot kv.persister.RaftStateSize() > kv.maxraftstate*10/9(%d > %d)", kv.me, kv.persister.RaftStateSize(),  kv.maxraftstate*10/9)
 
-	kvSnapshotData := kv.GSnapshot(index)
+	kvSnapshotData := kv.NewSnapshot(index)
 	kv.rf.TakeSnapshot(index, kvSnapshotData)
 }
 
@@ -314,27 +330,9 @@ func (kv *KVServer)restoreSnapshot(data []byte) {
 }
 
 
-func (kv *KVServer)generateSnapshot(index int) {
-	
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-
-	kv.snapshotIndex = index
-
-	e.Encode(kv.dbPool)
-	e.Encode(kv.historyRequest)
-    e.Encode(kv.snapshotIndex)
-    
-	data := w.Bytes()
-	kv.persister.SaveStateAndSnapshot(kv.persister.ReadRaftState(), data)
-	
-}
-
-
-
 func (kv *KVServer)readSnapshot(data []byte) {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
+	//kv.mu.Lock()
+	//defer kv.mu.Unlock()
 	if data==nil || len(data)<1{
 		return
 	}
@@ -352,27 +350,11 @@ func (kv *KVServer)readSnapshot(data []byte) {
 }
 
 
-
-
-func (kv *KVServer)GSnapshot(index int) []byte{
+func (kv *KVServer)NewSnapshot(index int) []byte{
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 
 	kv.snapshotIndex = index
-
-	e.Encode(kv.dbPool)
-	e.Encode(kv.historyRequest)
-    e.Encode(kv.snapshotIndex)
-    
-	data := w.Bytes()
-	return data
-	//kv.rf.SaveStateAndSnapshot(kv.rf.ReadRaftState(), data)
-
-}
-
-func (kv *KVServer)NewSnapshot() []byte{
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
 
 	e.Encode(kv.dbPool)
 	e.Encode(kv.historyRequest)
@@ -429,7 +411,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// You may need initialization code here.
 
 	go kv.ApplyChDaemon()
-	DPrintf("KVServer:[%d]: server %d Started------------ \n", kv.me, kv.me)
+	DPrintf("KVServer:[%d]: server  Started------------ \n", kv.me)
 
 	return kv
 }

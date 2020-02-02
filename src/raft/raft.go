@@ -269,6 +269,8 @@ func (rf *Raft) readPersist(data []byte) {
     d.Decode(& rf.currentTerm)
     d.Decode(& rf.votedFor)
     d.Decode(& rf.logs)
+    d.Decode(& rf.lastIncludedIndex)
+    d.Decode(& rf.lastIncludedTerm)
 
 }
 
@@ -435,58 +437,58 @@ func (rf * Raft)sendSnapshot(server int){
 
 
 
-func (rf * Raft)synSnapshot(serverId int){
-    DPrintf("synSnapshot: [%d-%s] start  sync to server[%d]  currentTerm is %d\n",rf.me,rf,serverId,rf.currentTerm)
-    installSnapshotArgs := InstallSnapshotsArgs{
-        Term:    rf.currentTerm,  //leader 任期号
-        LeaderId:    rf.me,     //leader id,方便follower重定向请求
-        LastIncludedIndex:    rf.lastIncludedIndex, // 快照中包含的最后的条目的日志索引
-        LastIncludedTerm:    rf.lastIncludedTerm, //快照中包含的最后的条目的日志任期
-        //Offset:              0, //快照的偏移量
-        Data:              rf.persister.ReadSnapshot(), //数据
-        //Done:                true, //是否发送完毕
-    }
-    installSnapshotsReply := InstallSnapshotsReply{}
+// func (rf * Raft)synSnapshot(serverId int){
+//     DPrintf("synSnapshot: [%d-%s] start  sync to server[%d]  currentTerm is %d\n",rf.me,rf,serverId,rf.currentTerm)
+//     installSnapshotArgs := InstallSnapshotsArgs{
+//         Term:    rf.currentTerm,  //leader 任期号
+//         LeaderId:    rf.me,     //leader id,方便follower重定向请求
+//         LastIncludedIndex:    rf.lastIncludedIndex, // 快照中包含的最后的条目的日志索引
+//         LastIncludedTerm:    rf.lastIncludedTerm, //快照中包含的最后的条目的日志任期
+//         //Offset:              0, //快照的偏移量
+//         Data:              rf.persister.ReadSnapshot(), //数据
+//         //Done:                true, //是否发送完毕
+//     }
+//     installSnapshotsReply := InstallSnapshotsReply{}
 
-    installSnapshotReplyHandler := func(serverId int, reply *InstallSnapshotsReply){
-        rf.mu.Lock()
-        defer rf.mu.Unlock()
+//     installSnapshotReplyHandler := func(serverId int, reply *InstallSnapshotsReply){
+//         rf.mu.Lock()
+//         defer rf.mu.Unlock()
 
-         //TODO 这里这个判断是否有必要 reply.Term < rf.currentTerm 
-        if rf.state!=Leader || reply.Term < rf.currentTerm {
-            return
-        }
-        //term expired loose leader
-        if reply.Term > rf.currentTerm{
-            rf.currentTerm = reply.Term
+//          //TODO 这里这个判断是否有必要 reply.Term < rf.currentTerm 
+//         if rf.state!=Leader || reply.Term < rf.currentTerm {
+//             return
+//         }
+//         //term expired loose leader
+//         if reply.Term > rf.currentTerm{
+//             rf.currentTerm = reply.Term
 
-            rf.turnToFollower()
-            DPrintf("synSnapshot: [%d-%s]:   reply term: %d bigger than  rf's term: %d  turns to follower\n", rf.me, rf,  reply.Term, rf.currentTerm)
-            return
-        }
+//             rf.turnToFollower()
+//             DPrintf("synSnapshot: [%d-%s]:   reply term: %d bigger than  rf's term: %d  turns to follower\n", rf.me, rf,  reply.Term, rf.currentTerm)
+//             return
+//         }
 
-        rf.matchIndex[serverId] = rf.lastIncludedIndex
-        rf.nextIndex[serverId] = rf.lastIncludedIndex+1
-    }
+//         rf.matchIndex[serverId] = rf.lastIncludedIndex
+//         rf.nextIndex[serverId] = rf.lastIncludedIndex+1
+//     }
 
-    go func() {
-        respChan :=  make(chan struct{})
-        go func() {
-            if rf.sendInstallSnapshots(serverId, &installSnapshotArgs, &installSnapshotsReply) {
-                respChan <- struct{}{}
-            }
-        }()
+//     go func() {
+//         respChan :=  make(chan struct{})
+//         go func() {
+//             if rf.sendInstallSnapshots(serverId, &installSnapshotArgs, &installSnapshotsReply) {
+//                 respChan <- struct{}{}
+//             }
+//         }()
 
-        select{
-            case <-time.After(300*time.Millisecond):
-                return
-            case <-respChan:
-                close(respChan)
-        }
-        installSnapshotReplyHandler(serverId, &installSnapshotsReply)
+//         select{
+//             case <-time.After(300*time.Millisecond):
+//                 return
+//             case <-respChan:
+//                 close(respChan)
+//         }
+//         installSnapshotReplyHandler(serverId, &installSnapshotsReply)
         
-    }()
-}
+//     }()
+// }
 
 // example RequestVote RPC handler.
 //请求投票RPC的实现函数,收到请求投票RPC后，就执行这个函数
@@ -936,7 +938,7 @@ func (rf *Raft) sendHeartbeat(id int) {
     //因为nextIndex[serverId] 存的下一条要发的日志的索引，既当前日志加1, 所以个快照比时要减一
     pre := rf.nextIndex[id]-1
 
-    //当发现快照比 next
+    //当发现server 的请求比快照小，数据不存在，就发起同步快照请求。
     if pre < rf.lastIncludedIndex {
         //rf.synSnapshot(id)
         DPrintf("sendHeartbeat:[%d-%s]:will sendSnapshot, cause pre < rf.lastIncludedIndex(%d < %d)  %d",  rf.me, rf,pre, rf.lastIncludedIndex)
@@ -955,6 +957,7 @@ func (rf *Raft) sendHeartbeat(id int) {
 
         //BUG fix
         //if rf.nextIndex[id] < len(rf.logs)
+        //当crash 发生后，先用快照恢复，此外leader上剩余的没有提交到快照的日志会以这种方式重新提交
         if rf.nextIndex[id] < len(rf.logs)+rf.lastIncludedIndex{
             args.Entries = append(args.Entries, rf.logs[rf.subIdx(rf.nextIndex[id]):]...)
             DPrintf("[%d-%s]send Heartbeat to peers[%d] at term %d rf.nextIndex[id]<rf.lastIdx()+1:%d < %d, rf.commitIndex:%d ,Entries:%v", rf.me, rf, id, rf.currentTerm, rf.nextIndex[id], len(rf.logs)+rf.lastIncludedIndex, rf.commitIndex, args.Entries)
@@ -1001,8 +1004,8 @@ func(rf *Raft)updateCommitIndex(){
             DPrintf("updateCommitIndex:[%d-%s]: leader success updated commitedIndex: %d \n", rf.me, rf, target)
             go func() { rf.commitCond.Broadcast() }()
         }else{
-            DPrintf("[%d-%s]: leader %d update commit index %d failed (log term %d != current Term %d)\n",
-                    rf.me, rf, rf.me, rf.commitIndex, rf.logs[target], rf.currentTerm)
+            DPrintf("[%d-%s]: leader  update commit index %d failed (log term %d != current Term %d)\n",
+                    rf.me, rf, rf.commitIndex, rf.logs[rf.subIdx(target)], rf.currentTerm)
         }
     }
 
@@ -1324,24 +1327,27 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
     //初始化选举定时器
     rf.electionTimer = time.NewTimer(rf.electionTimeOutDuration)
-	//receive heart beat and reset timer
-	//election trigger on
 
-    //已经提交的日志，怎么算是提交呢，半数的机器复制了日志，返回了True
+
+    //crash恢复时，先从readPersist 读取lastIndex 和Term，然后再赋值给commitIndex, lastApplied
+	// initialize from state persisted before a crash
+	rf.readPersist(persister.ReadRaftState())
+
+
+     //已经提交的日志，怎么算是提交呢，半数的机器复制了日志，返回了True
     rf.commitIndex=rf.lastIncludedIndex
 
     //最后被应用到状态机的日志项索引值
     rf.lastApplied=rf.lastIncludedIndex
 
-    //启动选举守护线程
+
+  //启动选举守护线程
     go rf.electionDaemon()
 
     go rf.ApplyLogEntryDaemon()
 
-	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
 
-    DPrintf("Make: [%d-%s]: peer start at term %d",  rf.me, rf, rf.currentTerm)
+    DPrintf("Make: [%d-%s]: peer start at term %d,rf.lastIncludedIndex:%d ,rf.commitIndex:%d ,rf.lastApplied:%d",  rf.me, rf, rf.currentTerm, rf.lastIncludedIndex,rf.commitIndex,rf.lastApplied)
 
 	return rf
 }

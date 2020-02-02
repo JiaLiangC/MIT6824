@@ -151,6 +151,8 @@ func partitioner(t *testing.T, cfg *config, ch chan bool, done *int32) {
 // maxraftstate is a positive number, the size of the state for Raft (i.e., log
 // size) shouldn't exceed 2*maxraftstate.
 func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash bool, partitions bool, maxraftstate int) {
+	//1 false true false  1000
+	//GenericTest(t, "3B", 1, false, true, false, 1000)
 
 	title := "Test: "
 	if unreliable {
@@ -295,6 +297,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 // similar to GenericTest, but with clients doing random operations (and using a
 // linearizability checker)
 func GenericTestLinearizability(t *testing.T, part string, nclients int, nservers int, unreliable bool, crash bool, partitions bool, maxraftstate int) {
+	//GenericTestLinearizability(t, "3B", 15, 7, true, true, true, 1000)
 
 	title := "Test: "
 	if unreliable {

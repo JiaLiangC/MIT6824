@@ -85,6 +85,7 @@ func (cfg *config) LogSize() int {
 	logsize := 0
 	for i := 0; i < cfg.n; i++ {
 		n := cfg.saved[i].RaftStateSize()
+		log.Printf("test: server[%d]  LogSize:%d \n",i,n)
 		if n > logsize {
 			logsize = n
 		}

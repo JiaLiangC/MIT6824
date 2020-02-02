@@ -95,7 +95,7 @@ func (ck *Clerk) Get(key string) string {
 
 		//select 一直阻塞，直到触发一个通道
 		select{
-			case <-time.After(200*time.Millisecond):
+			case <-time.After(500*time.Millisecond):
 				DPrintf("Client:[%d]: LeaderId is  %d GET TimeOut", ck.ClientId, ck.LeaderId)
 				ck.LeaderId+=1
 				continue
@@ -103,12 +103,12 @@ func (ck *Clerk) Get(key string) string {
 				// DPrintf("Client:[%d]: Client  GET requestResponse, LeaderId: %d,  WrongLeader: %v ", ck.ClientId, ck.LeaderId, reply.WrongLeader)
 				if ok && !reply.WrongLeader{
 					// DPrintf("Client:[%d]: Client  GET requestResponse, LeaderId: %d,  WrongLeader: %v ", ck.ClientId, ck.LeaderId, reply.WrongLeader)
+					ck.SeqNo+=1
 					if reply.Err == OK {
-						ck.SeqNo+=1
 						DPrintf("Client:[%d]: Client  GET requestResponse success, WrongLeader: %v LeaderId: %d, key is: %s value is %s, ck.SeqNo:%d", ck.ClientId, reply.WrongLeader, ck.LeaderId,key, reply.Value, ck.SeqNo)
 						return reply.Value
 					}
-					//这里为啥返回空
+					//这里为啥返回空,因为目前error类型只有一种，既key对应的值不存在，就默认返回空
 					return ""
 				}
 				ck.LeaderId+=1
