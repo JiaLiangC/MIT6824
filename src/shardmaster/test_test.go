@@ -3,13 +3,18 @@ package shardmaster
 import (
 	"sync"
 	"testing"
+	"log"
 )
 
 // import "time"
 import "fmt"
 
 func check(t *testing.T, groups []int, ck *Clerk) {
+
 	c := ck.Query(-1)
+	log.Printf("shardmaster check start ...\n")
+	log.Printf("groups is %v", groups)
+
 	if len(c.Groups) != len(groups) {
 		t.Fatalf("wanted %v groups, got %v", len(groups), len(c.Groups))
 	}
@@ -50,6 +55,9 @@ func check(t *testing.T, groups []int, ck *Clerk) {
 	if max > min+1 {
 		t.Fatalf("max %v too much larger than min %v", max, min)
 	}
+
+	log.Printf("shardmaster check finished ...\n")
+
 }
 
 func check_same_config(t *testing.T, c1 Config, c2 Config) {
@@ -88,13 +96,18 @@ func TestBasic(t *testing.T) {
 
 	cfa := make([]Config, 6)
 	cfa[0] = ck.Query(-1)
-
+	
+	fmt.Printf("Test: Basic init check start ...\n")
 	check(t, []int{}, ck)
+	fmt.Printf("Test: Basic init check finished ...\n")
+
 
 	var gid1 int = 1
 	ck.Join(map[int][]string{gid1: []string{"x", "y", "z"}})
 	check(t, []int{gid1}, ck)
 	cfa[1] = ck.Query(-1)
+	fmt.Printf("Test: Basic first join check finished ...\n")
+
 
 	var gid2 int = 2
 	ck.Join(map[int][]string{gid2: []string{"a", "b", "c"}})
@@ -111,12 +124,15 @@ func TestBasic(t *testing.T) {
 		t.Fatalf("wrong servers for gid %v: %v\n", gid2, sa2)
 	}
 
+	fmt.Printf("Test: Basic first Leave check start ...\n")
 	ck.Leave([]int{gid1})
 	check(t, []int{gid2}, ck)
 	cfa[4] = ck.Query(-1)
+	fmt.Printf("Test: Basic gid1 Leave check  ...\n")
 
 	ck.Leave([]int{gid2})
 	cfa[5] = ck.Query(-1)
+	fmt.Printf("Test: Basic first Leave check finished ...\n")
 
 	fmt.Printf("  ... Passed\n")
 

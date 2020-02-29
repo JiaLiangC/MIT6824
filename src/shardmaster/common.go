@@ -24,7 +24,7 @@ const NShards = 10
 // Please don't change this.
 type Config struct {
 	Num    int              // config number
-	Shards [NShards]int     // shard -> gid
+	Shards [NShards]int     // shard -> gid 处理shard 到 group 的映射，index[0-10]就是shard序号，对应的位置存储的内容是该shard所在的gid
 	Groups map[int][]string // gid -> servers[]
 }
 
@@ -36,6 +36,9 @@ type Err string
 
 type JoinArgs struct {
 	Servers map[int][]string // new GID -> servers mappings
+
+	ClientId int
+	SeqNum int
 }
 
 type JoinReply struct {
@@ -45,6 +48,9 @@ type JoinReply struct {
 
 type LeaveArgs struct {
 	GIDs []int
+
+	ClientId int
+	SeqNum int
 }
 
 type LeaveReply struct {
@@ -55,6 +61,9 @@ type LeaveReply struct {
 type MoveArgs struct {
 	Shard int
 	GID   int
+
+	ClientId int
+	SeqNum int
 }
 
 type MoveReply struct {
@@ -64,6 +73,9 @@ type MoveReply struct {
 
 type QueryArgs struct {
 	Num int // desired config number
+
+	ClientId int
+	SeqNum int
 }
 
 type QueryReply struct {

@@ -74,6 +74,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 //设置一个RPC超时时间
+//
 func (ck *Clerk) Get(key string) string {
 
 	//设置一个RPC请求超时，不然某个机器隔离的时候会无限制等待
