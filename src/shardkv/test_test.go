@@ -9,6 +9,7 @@ import "fmt"
 import "sync/atomic"
 import "sync"
 import "math/rand"
+import "log"
 
 const linearizabilityCheckTimeout = 1 * time.Second
 
@@ -30,17 +31,22 @@ func TestStaticShards(t *testing.T) {
 
 	ck := cfg.makeClient()
 
+
+	log.Printf("TestStaticShards  start join \n")
 	cfg.join(0)
 	cfg.join(1)
 
 	n := 10
 	ka := make([]string, n)
 	va := make([]string, n)
+	log.Printf("TestStaticShards  start  ck.Put \n")
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(20)
 		ck.Put(ka[i], va[i])
 	}
+
+	log.Printf("TestStaticShards  start  check Put \n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}

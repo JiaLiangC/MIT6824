@@ -13,19 +13,30 @@ const (
 	OK            = "OK"
 	ErrNoKey      = "ErrNoKey"
 	ErrWrongGroup = "ErrWrongGroup"
+	ErrWrongLeader = "WrongLeader"
 )
 
+const (
+	Get OpT = iota
+	Put
+	Append
+)
+
+
 type Err string
+type OpT int
 
 // Put or Append
 type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	Key   string
 	Value string
-	Op    string // "Put" or "Append"
+	OpType    OpT // "Put" or "Append"
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientId int
+	SeqNum int
 }
 
 type PutAppendReply struct {
@@ -36,6 +47,8 @@ type PutAppendReply struct {
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
+	ClientId int
+	SeqNum int
 }
 
 type GetReply struct {

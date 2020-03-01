@@ -13,12 +13,13 @@ import "crypto/rand"
 import "math/big"
 import "shardmaster"
 import "time"
+import "sync"
+import "log"
 
 //
 // which shard is a key in?
 // please use this function,
 // and please do not change it.
-//
 func key2shard(key string) int {
 	shard := 0
 	if len(key) > 0 {
@@ -26,6 +27,15 @@ func key2shard(key string) int {
 	}
 	shard %= shardmaster.NShards
 	return shard
+}
+
+const Debug = 1
+
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug > 0 {
+		log.Printf(format, a...)
+	}
+	return
 }
 
 func nrand() int64 {
@@ -40,9 +50,29 @@ type Clerk struct {
 	config   shardmaster.Config
 	make_end func(string) *labrpc.ClientEnd
 	// You will have to modify this struct.
+	ClientId int
+	SeqNum    int
+	LeaderId int
 }
 
-//
+
+var ClientIdCh chan int
+var once  sync.Once
+
+
+func getClientIdCh() chan int {
+    once.Do(func() {
+        ClientIdCh = make(chan int, 1)
+        max := 1 << 32
+        go func(){
+            for i :=0;i<max;i++{
+                ClientIdCh <- i
+            }
+        }()
+    })
+    return ClientIdCh 
+}
+
 // the tester calls MakeClerk.
 //
 // masters[] is needed to call shardmaster.MakeClerk().
@@ -56,6 +86,10 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.sm = shardmaster.MakeClerk(masters)
 	ck.make_end = make_end
 	// You'll have to add code here.
+	clientIdCh := getClientIdCh()
+	ck.ClientId = <- clientIdCh
+	ck.SeqNum = 0
+	ck.config = ck.sm.Query(-1)
 	return ck
 }
 
@@ -66,8 +100,7 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // You will have to modify this function.
 //
 func (ck *Clerk) Get(key string) string {
-	args := GetArgs{}
-	args.Key = key
+	args := GetArgs{Key: key, ClientId: ck.ClientId, SeqNum: ck.SeqNum}
 
 	for {
 		shard := key2shard(key)
@@ -75,14 +108,23 @@ func (ck *Clerk) Get(key string) string {
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the shard.
 			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
+				srv := ck.make_end(servers[ck.LeaderId])
 				var reply GetReply
+				DPrintf("Client:[%d]: Client  GET  RPC Call, LeaderId: %d, key is: %s, ck.SeqNum:%d", ck.ClientId, ck.LeaderId, key, ck.SeqNum)
 				ok := srv.Call("ShardKV.Get", &args, &reply)
+
 				if ok && reply.WrongLeader == false && (reply.Err == OK || reply.Err == ErrNoKey) {
+					ck.SeqNum += 1
+					DPrintf("Client:[%d]: Client  GET requestResponse success, WrongLeader: %v LeaderId: %d, key is: %s value is %s, ck.SeqNum:%d", ck.ClientId, reply.WrongLeader, ck.LeaderId,key, reply.Value, ck.SeqNum)
 					return reply.Value
 				}
+
 				if ok && (reply.Err == ErrWrongGroup) {
 					break
+				}
+
+				if ok && reply.WrongLeader == true{
+					ck.LeaderId = si
 				}
 			}
 		}
@@ -94,30 +136,36 @@ func (ck *Clerk) Get(key string) string {
 	return ""
 }
 
-//
+
 // shared by Put and Append.
 // You will have to modify this function.
-//
-func (ck *Clerk) PutAppend(key string, value string, op string) {
-	args := PutAppendArgs{}
-	args.Key = key
-	args.Value = value
-	args.Op = op
 
+func (ck *Clerk) PutAppend(key string, value string, op OpT) {
+
+	args := PutAppendArgs{Key: key, Value: value, OpType: op, SeqNum: ck.SeqNum, ClientId: ck.ClientId}
 
 	for {
+		ck.config = ck.sm.Query(-1)
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
+		DPrintf("Client[%d]:1. send a  PutAppend to leader. LeaderId:%d, args:%v", ck.ClientId, ck.LeaderId, args)
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
+				srv := ck.make_end(servers[ck.LeaderId])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.WrongLeader == false && reply.Err == OK {
+					ck.SeqNum += 1
+					DPrintf("Client:[%d]: Client  PutAppend requestResponse success, WrongLeader: %v LeaderId: %d, key is: %s , ck.SeqNum:%d", ck.ClientId, reply.WrongLeader, ck.LeaderId,key, ck.SeqNum)
 					return
 				}
+
 				if ok && reply.Err == ErrWrongGroup {
 					break
+				}
+
+				if ok && reply.WrongLeader == true{
+					ck.LeaderId = si
 				}
 			}
 		}
@@ -128,8 +176,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	ck.PutAppend(key, value, Put)
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	ck.PutAppend(key, value, Append)
 }

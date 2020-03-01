@@ -4,10 +4,10 @@ import (
 	"sync"
 	"testing"
 	"log"
+	"fmt"
 )
 
 // import "time"
-import "fmt"
 
 func check(t *testing.T, groups []int, ck *Clerk) {
 
