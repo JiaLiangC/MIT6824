@@ -290,7 +290,7 @@ func (sm *ShardMaster) doJoin(args JoinArgs){
 	//因为hash不是绝对均衡的分配，会有小小的偏差，这里再次做一个均衡
 	sm.rebalance(newConfig)
 	sm.configs = append(sm.configs,*newConfig)
-	DPrintf("ShardMaster[%d]:doJoin finished, newConfig:%v  ,sm.configs:%v \n", sm.me, newConfig, sm.configs)
+	DPrintf("ShardMaster[%d]:doJoin finished, newConfig:%v \n", sm.me, newConfig)
 	sm.mu.Unlock()
 
 }
@@ -329,7 +329,7 @@ func (sm *ShardMaster) doLeave(args LeaveArgs){
 	//因为hash不是绝对均衡的分配，会有小小的偏差，这里再次做一个均衡
 	sm.rebalance(newConfig)
 	sm.configs = append(sm.configs,*newConfig)
-	DPrintf("ShardMaster[%d]:doLeave finished, newConfig:%v  ,sm.configs:%v \n", sm.me, newConfig, sm.configs)
+	DPrintf("ShardMaster[%d]:doLeave finished, newConfig:%v   \n", sm.me, newConfig)
 	sm.mu.Unlock()
 
 }
@@ -348,13 +348,14 @@ func (sm *ShardMaster) doMove(args MoveArgs){
 	newConfig.Shards[args.Shard] = args.GID
 	sm.configs = append(sm.configs,*newConfig)
 	sm.mu.Unlock()
+	DPrintf("ShardMaster[%d]:doMove finished, newConfig:%v   \n", sm.me, newConfig)
 }
 
 
 //计算重新排列shards
 func  (sm *ShardMaster)rebalance(config *Config){
 	//找到最大的然后匀给最小的
-	DPrintf("ShardMaster[%d]:rebalance start, config:%v, sm.configs:%v \n", sm.me,config, sm.configs)
+	DPrintf("ShardMaster[%d]:rebalance start, config:%v\n", sm.me,config)
 	groups_count := len(config.Groups)
 	
 	if groups_count==0{
@@ -411,7 +412,7 @@ func  (sm *ShardMaster)rebalance(config *Config){
 		config.Shards[shard] = minGid
 		sm.rebalance(config)
 	}
-	DPrintf("ShardMaster[%d]:rebalance finished, config:%v, sm.configs:%v \n", sm.me,config, sm.configs)
+	DPrintf("ShardMaster[%d]:rebalance finished, config:%v \n", sm.me,config)
 
 }
 
@@ -427,7 +428,7 @@ func (sm *ShardMaster)copyConfig(index int, config *Config) {
 	new_groups := make(map[int][]string)
 	copyMap(new_groups, sm.configs[index].Groups)
 	config.Groups = new_groups
-	DPrintf("ShardMaster[%d]:copyConfig, config:%v, sm.configs:%v \n", sm.me,config, sm.configs)
+	DPrintf("ShardMaster[%d]:copyConfig, config:%v \n", sm.me,config)
 
 }
 
