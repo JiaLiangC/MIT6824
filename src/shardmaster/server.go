@@ -9,7 +9,7 @@ import "consistenthash"
 import "time"
 import "log"
 
-const Debug = 1
+const Debug = 0
 
 type ShardMaster struct {
 	mu      sync.Mutex
@@ -121,11 +121,11 @@ func (sm *ShardMaster) waitForAgree(cmd Op,  fillReply func(success bool)){
 func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
 	// Your code here.
 	//1.过滤重复请求 2.等待applyChDaemon 的通知 3.过滤非leader 请求
-	DPrintf("ShardMaster[%d]:2.Join  receive Query RPC Request, command:%v ", sm.me, args)
+	DPrintf("ShardMaster[%d]:2.Join  receive Query RPC Request, args:%v ", sm.me, args)
 	command := Op{OpType: Join, Args: *args, ClientId: args.ClientId, SeqNum: args.SeqNum}
 
 	sm.waitForAgree(command,func(success bool){
-		DPrintf("ShardMaster[%d]:Join  receive Join RPC Request, command:%v ,success:%v \n", sm.me, command, success)
+		DPrintf("ShardMaster[%d]:Join  receive Join RPC Request, command:%+v ,success:%v \n", sm.me, command, success)
 		if success{
 			reply.WrongLeader = false
 			reply.Err = OK
@@ -143,7 +143,7 @@ func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
 	// Your code here.
 	command := Op{OpType: Leave, Args: *args, ClientId: args.ClientId, SeqNum: args.SeqNum}
 	sm.waitForAgree(command, func(success bool){
-		DPrintf("ShardMaster[%d]:Leave  receive Leave RPC Request, command:%v ,success:%v \n", sm.me, command, success)
+		DPrintf("ShardMaster[%d]:Leave  receive Leave RPC Request, command:%+v ,success:%v \n", sm.me, command, success)
 		if success{
 			reply.WrongLeader = false
 			reply.Err = OK
@@ -158,7 +158,7 @@ func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 	// Your code here.
 	command := Op{OpType: Move, Args: *args, ClientId: args.ClientId, SeqNum: args.SeqNum}
 	sm.waitForAgree(command, func(success bool){
-		DPrintf("ShardMaster[%d]:Leave  receive Move RPC Request, command:%v ,success:%v \n", sm.me, command, success)
+		DPrintf("ShardMaster[%d]:Leave  receive Move RPC Request, command:%+v ,success:%v \n", sm.me, command, success)
 		if success{
 			reply.WrongLeader = false
 			reply.Err = OK
@@ -171,10 +171,10 @@ func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 
 func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	// Your code here.
-	DPrintf("ShardMaster[%d]:2.Query  receive Query RPC Request, command:%v ", sm.me, args)
+	DPrintf("ShardMaster[%d]:2.Query  receive Query RPC Request, args:%+v ", sm.me, args)
 	command := Op{OpType: Query, Args: *args, ClientId: args.ClientId, SeqNum: args.SeqNum}
 	sm.waitForAgree(command,func(success bool){
-		DPrintf("ShardMaster[%d]:2.Query  receive Query RPC Request, command:%v ,success:%v \n", sm.me, args, success)
+		DPrintf("ShardMaster[%d]:2.Query  receive Query RPC Request, command:%+v ,success:%v \n", sm.me, command, success)
 		if success{
 			reply.WrongLeader=false
 			reply.Config = Config{}

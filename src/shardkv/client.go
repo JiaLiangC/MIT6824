@@ -14,7 +14,6 @@ import "math/big"
 import "shardmaster"
 import "time"
 import "sync"
-import "log"
 
 //
 // which shard is a key in?
@@ -29,14 +28,7 @@ func key2shard(key string) int {
 	return shard
 }
 
-const Debug = 1
 
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug > 0 {
-		log.Printf(format, a...)
-	}
-	return
-}
 
 func nrand() int64 {
 	max := big.NewInt(int64(1) << 62)
@@ -53,6 +45,7 @@ type Clerk struct {
 	ClientId int
 	SeqNum    int
 	LeaderId int
+	mu           sync.Mutex
 }
 
 
@@ -90,6 +83,9 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.ClientId = <- clientIdCh
 	ck.SeqNum = 0
 	ck.config = ck.sm.Query(-1)
+	ck.LeaderId = 0
+
+	DPrintf("shardKv MakeClerk: %+v", ck)
 	return ck
 }
 
@@ -110,12 +106,12 @@ func (ck *Clerk) Get(key string) string {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[ck.LeaderId])
 				var reply GetReply
-				DPrintf("Client:[%d]: Client  GET  RPC Call, LeaderId: %d, key is: %s, ck.SeqNum:%d", ck.ClientId, ck.LeaderId, key, ck.SeqNum)
+				DPrintf("Client:[%d]: Client  GET  RPC Call, LeaderId: %d, key is: %s,shard is: %d, ck.SeqNum:%d", ck.ClientId, ck.LeaderId, key, shard, ck.SeqNum)
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 
 				if ok && reply.WrongLeader == false && (reply.Err == OK || reply.Err == ErrNoKey) {
 					ck.SeqNum += 1
-					DPrintf("Client:[%d]: Client  GET requestResponse success, WrongLeader: %v LeaderId: %d, key is: %s value is %s, ck.SeqNum:%d", ck.ClientId, reply.WrongLeader, ck.LeaderId,key, reply.Value, ck.SeqNum)
+					DPrintf("Client:[%d]: Client  GET requestResbreakponse success, WrongLeader: %v LeaderId: %d, key is: %s value is %s,shard is: %d, ck.SeqNum:%d", ck.ClientId, reply.WrongLeader, ck.LeaderId,key, reply.Value,shard, ck.SeqNum)
 					return reply.Value
 				}
 
@@ -124,7 +120,8 @@ func (ck *Clerk) Get(key string) string {
 				}
 
 				if ok && reply.WrongLeader == true{
-					ck.LeaderId = si
+					ck.LeaderId = si+1
+					ck.LeaderId %= len(servers)
 				}
 			}
 		}
@@ -165,7 +162,8 @@ func (ck *Clerk) PutAppend(key string, value string, op OpT) {
 				}
 
 				if ok && reply.WrongLeader == true{
-					ck.LeaderId = si
+					ck.LeaderId = si+1
+					ck.LeaderId %= len(servers)
 				}
 			}
 		}

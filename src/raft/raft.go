@@ -25,9 +25,22 @@ import (
 "sort"
 "bytes"
 "labgob"
+"log"
 ) 
 // import "bytes"
 // import "labgob"
+
+
+const Debug = 0
+
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+    if Debug > 0 {
+        log.Printf(format, a...)
+    }
+    return
+}
+
+
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -180,6 +193,20 @@ func (rf *Raft) GetState() (int, bool) {
     //DPrintf("[%d-%s]: isleader return: %t at term %d \n", rf.me, rf, isleader, rf.currentTerm)
 	return term, isleader
 }
+
+
+func (rf *Raft) GetCommitIndex() (int, bool) {
+    // Your code here (2A).
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
+    var commitIndex int
+    var isleader bool
+    commitIndex = rf.commitIndex
+    isleader = rf.state == Leader
+    //DPrintf("[%d-%s]: isleader return: %t at term %d \n", rf.me, rf, isleader, rf.currentTerm)
+    return commitIndex, isleader
+}
+
 
 func (rf *Raft) String() string {
     // rf.mu.Lock()
