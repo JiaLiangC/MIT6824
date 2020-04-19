@@ -108,6 +108,7 @@ func (ck *Clerk) Get(key string) string {
 				var reply GetReply
 				DPrintf("Client:[%d]: Client  GET  RPC Call, LeaderId: %d, key is: %s,shard is: %d, ck.SeqNum:%d", ck.ClientId, ck.LeaderId, key, shard, ck.SeqNum)
 				ok := srv.Call("ShardKV.Get", &args, &reply)
+				DPrintf("Client:[%d]: Client  GET  RPC Call finished, LeaderId: %d, key is: %s,shard is: %d, ck.SeqNum:%d, reply:%+v, ok:%+v", ck.ClientId, ck.LeaderId, key, shard, ck.SeqNum, reply,ok)
 
 				if ok && reply.WrongLeader == false && (reply.Err == OK || reply.Err == ErrNoKey) {
 					ck.SeqNum += 1
@@ -119,10 +120,12 @@ func (ck *Clerk) Get(key string) string {
 					break
 				}
 
-				if ok && reply.WrongLeader == true{
-					ck.LeaderId = si+1
-					ck.LeaderId %= len(servers)
-				}
+				//if ok && reply.WrongLeader == true{
+				//	ck.LeaderId = si+1
+				//	ck.LeaderId %= len(servers)
+				//}
+				ck.LeaderId = si+1
+				ck.LeaderId %= len(servers)
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -148,9 +151,13 @@ func (ck *Clerk) PutAppend(key string, value string, op OpT) {
 		DPrintf("Client[%d]:1. send a  PutAppend to leader. LeaderId:%d, args:%v", ck.ClientId, ck.LeaderId, args)
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
+				DPrintf("Client[%d]:1.00 ready send a  PutAppend to leader. LeaderId:%d, si:%d make_end", ck.ClientId, ck.LeaderId, si)
 				srv := ck.make_end(servers[ck.LeaderId])
+				DPrintf("Client[%d]:1.00 ready send a  PutAppend to leader. LeaderId:%d, si:%d srv:%+v", ck.ClientId, ck.LeaderId, si, srv)
 				var reply PutAppendReply
+				DPrintf("Client[%d]:1.0 send a  PutAppend to leader. LeaderId:%d, args:%+v waiting", ck.ClientId, ck.LeaderId, args)
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
+				DPrintf("Client[%d]:1.1 send a  PutAppend to leader. LeaderId:%d, args:%+v reply:%+v", ck.ClientId, ck.LeaderId, args, reply)
 				if ok && reply.WrongLeader == false && reply.Err == OK {
 					ck.SeqNum += 1
 					DPrintf("Client:[%d]: Client  PutAppend requestResponse success, WrongLeader: %v LeaderId: %d, key is: %s , ck.SeqNum:%d", ck.ClientId, reply.WrongLeader, ck.LeaderId,key, ck.SeqNum)
@@ -161,10 +168,13 @@ func (ck *Clerk) PutAppend(key string, value string, op OpT) {
 					break
 				}
 
-				if ok && reply.WrongLeader == true{
-					ck.LeaderId = si+1
-					ck.LeaderId %= len(servers)
-				}
+				ck.LeaderId = si+1
+				ck.LeaderId %= len(servers)
+
+				//if ok && reply.WrongLeader == true{
+				//	ck.LeaderId = si+1
+				//	ck.LeaderId %= len(servers)
+				//}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
