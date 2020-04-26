@@ -26,6 +26,7 @@ import (
 "bytes"
 "labgob"
 "log"
+_ "net/http/pprof"
 ) 
 // import "bytes"
 // import "labgob"
@@ -384,8 +385,8 @@ func (rf *Raft)persistStateAndSnapshot(kvSnapshotData []byte){
 
 //Raft 收到KV Server生成快照的请求后更新完自己的快照信息就立刻返回，不要阻塞，快照同步交给心跳去处理
 func (rf *Raft)TakeSnapshot(index int, kvSnapshotData []byte){
-    rf.mu.Lock()
-    defer rf.mu.Unlock()
+    //rf.mu.Lock()
+    //defer rf.mu.Unlock()
 
     if rf.commitIndex < index || index <= rf.lastIncludedIndex{
         panic("TakeSnapshot: new snapshots index <= old snapshots index")
@@ -704,7 +705,8 @@ func (rf *Raft)ApplyLogEntryDaemon(){
             copy(sendLogs, rf.logs[rf.subIdx(lastIdx+1) : rf.subIdx(rf.commitIndex+1)])
             //DPrintf("[%d-%s]:  in  ApplyLogEntryDaemon sendLogs is %+v ", rf.me, rf, sendLogs)
         }
-        rf.mu.Unlock()
+
+
 
         for i:=0; i< sendLen;i++{
             applyMsg := ApplyMsg{
@@ -716,6 +718,7 @@ func (rf *Raft)ApplyLogEntryDaemon(){
             DPrintf("[%d-%s]:  send applyMsg to  applyCh  at term %d, applyMsg: %+v", rf.me, rf, rf.currentTerm, applyMsg)
             //rf.persist()
         }
+        rf.mu.Unlock()
     }
 
 }
@@ -853,10 +856,10 @@ func (rf *Raft) sendHeartbeat(id int) {
     DPrintf("[%d-%s]:sendHeartbeat  start  send Heartbeat to  peers[%d] at term %d", rf.me, rf, id, rf.currentTerm)
 
     rf.mu.Lock()
-    defer rf.mu.Unlock()
 
     if rf.state != Leader{
         DPrintf("[%d-%s]:sendHeartbeat peer think he is not leader then return  %d",  rf.me, rf, rf.currentTerm)
+        rf.mu.Unlock()
         return
     }
 
@@ -866,6 +869,7 @@ func (rf *Raft) sendHeartbeat(id int) {
     //当发现server 的nextIndex比快照小，数据不存在，就发起同步快照请求
     if pre < rf.lastIncludedIndex {
         DPrintf("[%d-%s]:sendHeartbeat will sendSnapshot, cause pre < rf.lastIncludedIndex(%d < %d)  %d",  rf.me, rf,pre, rf.lastIncludedIndex)
+        rf.mu.Unlock()
         rf.sendSnapshot(id)
         return
     }
@@ -887,7 +891,7 @@ func (rf *Raft) sendHeartbeat(id int) {
         args.Entries = append(args.Entries, rf.logs[rf.subIdx(rf.nextIndex[id]):]...)
         DPrintf("[%d-%s]send Heartbeat to peers[%d] at term %d rf.nextIndex[id]<rf.lastIdx()+1:%d < %d, rf.commitIndex:%d ,args.PrevLogIndex:%d,args.PrevLogTerm:%d, args.LeaderCommit:%d,args.Entries:%v", rf.me, rf, id, rf.currentTerm, rf.nextIndex[id], len(rf.logs)+rf.lastIncludedIndex, rf.commitIndex, args.PrevLogIndex,args.PrevLogTerm, args.LeaderCommit,args.Entries)
     }
-
+    rf.mu.Unlock()
     //这里send 发送心跳应该用go 程去做，不然网络卡顿，会引起自己这边的超时
     go func() {
         reply := &AppendEntriesReply{}
@@ -1048,7 +1052,6 @@ func (rf * Raft)canvassVotes() {
     replyHandler := func(reply *RequestVoteReply){
         //那么就令 currentTerm 等于 T，并切换状态为跟随者
         rf.mu.Lock()
-        defer rf.mu.Unlock()
 
         if rf.state == Candidate{
             if reply.Term > rqVoteargs.Term{
@@ -1064,6 +1067,7 @@ func (rf * Raft)canvassVotes() {
                 //重置选举时间，返回函数
                 rf.resetElection <- struct{}{}
                 DPrintf("canvassVotes: [%d-%s]:   reply term: %d bigger then  rf's term: %d  turns to follower\n", rf.me, rf,  reply.Term, rf.currentTerm)
+                rf.mu.Unlock()
                 return
             }
 
@@ -1082,14 +1086,17 @@ func (rf * Raft)canvassVotes() {
                     //选举成功后，设置nextIndex 和 matchedIndex
                     rf.resetAfterElectionSuccess()
                     DPrintf("[%d-%s]: peer %d become new leader. at term %d \n", rf.me, rf, rf.me, rf.currentTerm)
-                    
+                    rf.mu.Unlock()
                     //开启leader的心跳守护进程，开始给follower 发送心跳
                     go rf.heartbeatDaemon()
                     return
                 }
+
                 receivedVotesCnt += 1
             }
+
         }
+        rf.mu.Unlock()
     }
 
 
@@ -1109,9 +1116,9 @@ func (rf * Raft)canvassVotes() {
                     //处理投票RPC返回的结果
                     replyHandler(reply)
                 }else{
-                    rf.mu.Lock()
+                    //rf.mu.Lock()
                     DPrintf("[%d-%s]  failed to send sendRequestVote RPC to peer[%d] at term %d", rf.me, rf, i, rf.currentTerm)
-                    rf.mu.Unlock()
+                    //rf.mu.Unlock()
                 }
             }(idx)
         }
@@ -1149,7 +1156,7 @@ func (rf *Raft)heartbeatDaemon(){
 
     for{
         //每次开始前检测一下自己还是不是leader，因为网络等原因可能重新触发选举，导致自己的任期过期，在选举守护进程中被重置为follower
-        if _, isLeader := rf.GetState();!isLeader{
+        if rf.state != Leader{
             DPrintf("[%d-%s]: peer think he is not leader then return  %d",  rf.me, rf, rf.currentTerm)
             return
         }
@@ -1171,7 +1178,9 @@ func (rf *Raft)heartbeatDaemon(){
             }
             
         }
-        time.Sleep(rf.heartbeatTimerInterval)
+        //time.Sleep(rf.heartbeatTimerInterval)
+        time.Sleep(time.Millisecond*50)
+
     }
 }
 
