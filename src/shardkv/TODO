@@ -1,0 +1,72 @@
+TODO
+1.一致性hash 中节点算法修改为更高速的红黑树查找
+    1.二叉树
+    2.搜索二叉树
+    3.平衡二叉树
+    4.红黑树
+写修改前后的 benchmark
+
+2.结构体值传递不能修改结构体内部的值
+
+3.弄清楚go指针用法
+
+
+
+
+4b
+
+配置变更
+
+
+shard server 要监控配置变更
+启动一个线程, 每秒都去拉 shard master 的 config
+一旦发现配置变更, shard 发生迁移，
+
+
+//要每个节点都可以计算出，以便leader挂了后, follower 继任继续pull
+计算出迁入和迁出的shard ，对迁出的shard 做标记，开始拒绝该shard的请求，并且 返回 wronggroup
+
+
+对于迁入的shard ，在没迁入完成时，统一wrong leader处理
+迁入的就主动去 pull, 发送完成后清理shard
+
+配置变更
+
+一.
+    server 启动时 启动一个线程
+    该现场任务如下
+        100毫秒找master 拉一次 config
+        如果和自己的config对比，等于自己的 config num + 1
+        然后判断是否完成配置迁移，如果未完成就先持久化这个新配置:
+            持久化保存这个 config, 怎么持久化呢, 放到 rfat 日志里去
+            (这里必须持久化保存，保证这个信息一致，否则leader server 挂了以后新的server无法获取这个信息去拉取配置)
+
+        然后在kv server 的 applyCh 中,判断如果是Config 类型，首先更新 配置变更导致 inShard 和 outShard,
+        并且num 大于自己那就需要做config 迁移了
+
+    config 迁移中
+
+        1.比对新旧两个 config 作出一个迁移列表, 需要拉取或者发送哪些shard 任务列表用 config num 作为key
+        1.5 对于所有server来说:  舍弃旧的配置，使用新的配置
+        2. leader: 迭代每个任务开启一个专门的工作线程去拉取 shards
+            2.1该工作线程负责
+                1.shards 可能来自多个 group,  分别对每个shard 所在的group 并发的发起请求
+                2.处理请求结果,如果当前的num 和返回的num一样，并且还在工作列表中，就把返回的数据 发到raft中
+                    // 发到raft中，这样follower 就可以根据这个数据更新自己的数据
+
+            对于所有server
+                然后在applychDaemon中判断如果是应用的config ，就改变 kv db 给对应的key 新的数据
+                然后更新 kv 历史的请求列表，如果clint 最新的请求没返回的新，就用返回的最新请求覆盖，大了就直接覆盖
+                然后更新work list
+                    如果是leader 就通知原来的主人删除那个shard
+
+                所有都完成后，就从work list 中清楚这个任务
+
+        3.
+        server 完成响应返回shard，清理shard的rpc
+
+
+
+
+
+  
