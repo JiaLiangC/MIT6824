@@ -6,8 +6,8 @@ import "labrpc"
 import "sync"
 import "labgob"
 import "consistenthash"
-import "time"
 import "log"
+import _ "net/http/pprof"
 
 const Debug = 0
 
@@ -23,7 +23,7 @@ type ShardMaster struct {
 	//snapshotIndex  int
 	consistentHashMap *consistenthash.Map
 	persister *raft.Persister
-	historyRequest map[int]int
+	historyRequest map[int64]int
 	notifyChs map[int]chan struct{}
 	doneCh chan struct{}
 	
@@ -39,7 +39,7 @@ type Op struct {
 	// Your data here.
 	OpType   OpT      //Join  Leave  Move Query
 	Args interface{}
-	ClientId 	int  //客户端ID，为了去重
+	ClientId 	int64  //客户端ID，为了去重
 	SeqNum 	 int    //请求序列号，去重使用
 }
 
@@ -69,42 +69,49 @@ func (sm *ShardMaster) waitForAgree(cmd Op,  fillReply func(success bool)){
 
 	sm.mu.Lock()
 	latestSeq, ok := sm.historyRequest[cmd.ClientId]
-
+	sm.mu.Unlock()
 	if ok{
 		//过期请求就返回 WrongLeader
 		if  cmd.SeqNum <= latestSeq  {
 			fillReply(false)
 			DPrintf("ShardMaster[%d]:3.waitForAgree false,cmd.SeqNum <= latestSeq(%d<=%d) \n", sm.me,cmd.SeqNum,latestSeq)
-			sm.mu.Unlock()
 			return
 		}
 
-		if  cmd.SeqNum > latestSeq{
-			//fillReply(true)
-			sm.historyRequest[cmd.ClientId] = cmd.SeqNum
-			//DPrintf("ShardMaster[%d]:3.waitForAgree false,cmd.SeqNum <= latestSeq(%d<=%d) \n", sm.me,cmd.SeqNum,latestSeq)
-			// sm.mu.Unlock()
-			// return
-		}
+		//if  cmd.SeqNum > latestSeq{
+		//	//fillReply(true)
+		//	sm.mu.Lock()
+		//	sm.historyRequest[cmd.ClientId] = cmd.SeqNum
+		//	//DPrintf("ShardMaster[%d]:3.waitForAgree false,cmd.SeqNum <= latestSeq(%d<=%d) \n", sm.me,cmd.SeqNum,latestSeq)
+		//	sm.mu.Unlock()
+		//	// return
+		//}
 
 	}else{
-		sm.historyRequest[cmd.ClientId] = cmd.SeqNum
+		//sm.mu.Lock()
+		//sm.historyRequest[cmd.ClientId] = cmd.SeqNum
+		//sm.mu.Unlock()
 	}
 
 	CommandIndex, term, _ := sm.rf.Start(cmd)
 	notifyCh := make(chan struct{})
 	//这里chan设计请求不能并发
+	sm.mu.Lock()
 	sm.notifyChs[CommandIndex] = notifyCh
 	sm.mu.Unlock()
 	//这里设计一个超时
 
+
+	//TODO  bug 这里加了 去重复的请求，当请求在server 端口成功，但是在返回之前这里超时了，就会被设置为wrong leader，
+	//TODO 但是 history request已经写入，就会阻止后续的请求导致卡死。
+
 	select{
 	case <-sm.doneCh:
 		return
-	case <- time.After(300*time.Millisecond):
-		DPrintf("ShardMaster[%d]:3.waitForAgree false, timeout , \n", sm.me)
-		fillReply(false)
-		return
+	//case <- time.After(300*time.Millisecond):
+	//	DPrintf("ShardMaster[%d]:3.waitForAgree false, timeout , \n", sm.me)
+	//	fillReply(false)
+	//	return
 	case <-notifyCh:
 		if currentTerm, isLeader := sm.rf.GetState();!isLeader || term!=currentTerm {
 			DPrintf("ShardMaster[%d]:3.waitForAgree false,WrongLeader \n", sm.me)
@@ -225,9 +232,14 @@ func (sm *ShardMaster) ApplyChDaemon(){
 
 						if !ok || op.SeqNum >= latestSeq{
 							DPrintf("ShardMaster[%d]:ApplyChDaemon apply success, msg:%v \n", sm.me, msg)
-							sm.updateConfig(op.OpType, op.Args)
 
 							sm.mu.Lock()
+							sm.historyRequest[op.ClientId] = op.SeqNum
+							sm.mu.Unlock()
+
+							sm.updateConfig(op.OpType, op.Args)
+							sm.mu.Lock()
+							sm.historyRequest[op.ClientId] = op.SeqNum
 							if ch, ok := sm.notifyChs[msg.CommandIndex];ok && ch!=nil{
 								close(ch)
 								delete(sm.notifyChs, msg.CommandIndex)
@@ -493,7 +505,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	// Your code here.
 	sm.consistentHashMap = consistenthash.New(100, nil)
 	sm.persister = persister
-	sm.historyRequest = make(map[int]int)
+	sm.historyRequest = make(map[int64]int)
 	sm.notifyChs = make(map[int]chan struct{})
 	sm.doneCh = make(chan struct{})
 
