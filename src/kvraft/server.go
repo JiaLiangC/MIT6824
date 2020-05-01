@@ -72,6 +72,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 
+
+	//过滤raft 已经apply了的请求
 	kv.mu.Lock()
 	if  latestReply, ok := kv.historyRequest[args.ClientId]; ok{
 		if args.SeqNo <= latestReply.SeqNo{
@@ -85,6 +87,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 
 
+	//对于没有apply，需要重试的请求
 	SeqNo,ok := kv.cacheRequest[args.ClientId]
 
 	if !ok{

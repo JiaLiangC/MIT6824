@@ -1,6 +1,9 @@
 package shardkv
 
-import "linearizability"
+import (
+	"linearizability"
+	"net/http"
+)
 
 import "testing"
 import "strconv"
@@ -10,19 +13,22 @@ import "sync/atomic"
 import "sync"
 import "math/rand"
 import "log"
+import _ "net/http/pprof"
+
 
 const linearizabilityCheckTimeout = 1 * time.Second
 
 func check(t *testing.T, ck *Clerk, key string, value string) {
+	log.Printf("TestStaticShards  ck.check ,ck.Get(%s) start \n",key)
 	v := ck.Get(key)
 	if v != value {
 		t.Fatalf("Get(%v): expected:\n%v\nreceived:\n%v", key, value, v)
 	}
+	log.Printf("TestStaticShards  ck.check finished,key: %s \n",key)
 }
 
-//
+
 // test static 2-way sharding, without shard movement.
-//
 func TestStaticShards(t *testing.T) {
 	fmt.Printf("Test: static shards ...\n")
 
@@ -30,7 +36,6 @@ func TestStaticShards(t *testing.T) {
 	defer cfg.cleanup()
 
 	ck := cfg.makeClient()
-
 
 	log.Printf("TestStaticShards  start join \n")
 	cfg.join(0)
@@ -48,24 +53,33 @@ func TestStaticShards(t *testing.T) {
 
 	log.Printf("TestStaticShards  start  check Put \n")
 	for i := 0; i < n; i++ {
+		log.Printf("TestStaticShards  check Put i %d \n",i)
 		check(t, ck, ka[i], va[i])
 	}
 
 	// make sure that the data really is sharded by
 	// shutting down one shard and checking that some
 	// Get()s don't succeed.
+	log.Printf("TestStaticShards  ShutdownGroup 1 \n")
 	cfg.ShutdownGroup(1)
+
+	log.Printf("TestStaticShards start check that no server's log is too big.  \n")
 	cfg.checklogs() // forbid snapshots
 
 	ch := make(chan bool)
+	
+
 	for xi := 0; xi < n; xi++ {
+		//create many kv client
 		ck1 := cfg.makeClient() // only one call allowed per client
 		go func(i int) {
 			defer func() { ch <- true }()
 			check(t, ck1, ka[i], va[i])
+			log.Printf("TestStaticShards wait a bit,check:%d. finished \n",xi)
 		}(xi)
 	}
 
+	log.Printf("TestStaticShards wait a bit, only about half the Gets should succeed.  \n")
 	// wait a bit, only about half the Gets should succeed.
 	ndone := 0
 	done := false
@@ -73,20 +87,29 @@ func TestStaticShards(t *testing.T) {
 		select {
 		case <-ch:
 			ndone += 1
-		case <-time.After(time.Second * 2):
+		case <-time.After(time.Second * 1):
 			done = true
 			break
 		}
 	}
 
+	//如果 睡眠时间短，
+	//日志还没完全被回放完成，导致后面请求数据的时候，请求到空
+	//回放日志加log
+
+
 	if ndone != 5 {
 		t.Fatalf("expected 5 completions with one shard dead; got %v\n", ndone)
 	}
 
+	log.Printf("TestStaticShards wait a bit, only about half the Gets should succeed finished.  \n")
+
 	// bring the crashed shard/group back to life.
 	cfg.StartGroup(1)
 	for i := 0; i < n; i++ {
+		log.Printf("TestStaticShards bring the crashed shard,check:%d.  \n",i)
 		check(t, ck, ka[i], va[i])
+		log.Printf("TestStaticShards bring the crashed shard,check:%d. finished \n",i)
 	}
 
 	fmt.Printf("  ... Passed\n")
@@ -105,25 +128,38 @@ func TestJoinLeave(t *testing.T) {
 	n := 10
 	ka := make([]string, n)
 	va := make([]string, n)
+
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(5)
 		ck.Put(ka[i], va[i])
+		log.Printf("TestJoinLeave .put %d \n",i)
 	}
+	log.Printf("TestJoinLeave . start check \n")
+
 	for i := 0; i < n; i++ {
+		log.Printf("TestJoinLeave .  check i:%d  \n",i)
 		check(t, ck, ka[i], va[i])
 	}
 
+	log.Printf("TestJoinLeave . start join new config \n")
 	cfg.join(1)
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
+		log.Printf("TestJoinLeave . after join check i:%d \n",i)
 		x := randstring(5)
 		ck.Append(ka[i], x)
+		log.Printf("TestJoinLeave . Append i:%d \n",i)
 		va[i] += x
 	}
 
+	log.Printf("TestJoinLeave . finish check join new config \n")
+
+//join 新config后 shard 变动，
+
 	cfg.leave(0)
+	log.Printf("TestJoinLeave . leave   config0 finished \n")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -171,16 +207,20 @@ func TestSnapshot(t *testing.T) {
 	cfg.join(2)
 	cfg.leave(0)
 
+	log.Printf("TestSnapshot . leave   and joint check start \n")
 	for i := 0; i < n; i++ {
+		log.Printf("TestSnapshot . leave   and joint check i:%d \n",i)
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
+	log.Printf("TestSnapshot . leave   and joint check finished \n")
 
 	cfg.leave(1)
 	cfg.join(0)
 
+	log.Printf("TestSnapshot . leave   and rejoint then append start \n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
@@ -190,6 +230,7 @@ func TestSnapshot(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
+	log.Printf("TestSnapshot . leave   and rejoint then append check start \n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
@@ -198,14 +239,21 @@ func TestSnapshot(t *testing.T) {
 
 	cfg.checklogs()
 
+	log.Printf("TestSnapshot . start shartDown  group\n")
+
 	cfg.ShutdownGroup(0)
 	cfg.ShutdownGroup(1)
 	cfg.ShutdownGroup(2)
+	log.Printf("TestSnapshot . finish shartDown  group\n")
 
 	cfg.StartGroup(0)
 	cfg.StartGroup(1)
 	cfg.StartGroup(2)
+	log.Printf("TestSnapshot . finish restart group \n")
 
+	//time.Sleep(4 * time.Second)
+
+	log.Printf("TestSnapshot . finish restart group and start check\n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
@@ -235,17 +283,22 @@ func TestMissChange(t *testing.T) {
 		check(t, ck, ka[i], va[i])
 	}
 
+
 	cfg.join(1)
 
+
+	//关闭group 0 ,1 ,2 的 server 0
 	cfg.ShutdownServer(0, 0)
 	cfg.ShutdownServer(1, 0)
 	cfg.ShutdownServer(2, 0)
 
+	log.Printf("TestMissChange  shutdown  server0  finished \n")
 	cfg.join(2)
 	cfg.leave(1)
 	cfg.leave(0)
 
 	for i := 0; i < n; i++ {
+		log.Printf("TestMissChange  check  and append %d \n",i)
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
 		ck.Append(ka[i], x)
@@ -254,6 +307,7 @@ func TestMissChange(t *testing.T) {
 
 	cfg.join(1)
 
+	log.Printf("TestMissChange after shutdown  server0 cfg join1 finisehd  \n")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
@@ -265,7 +319,10 @@ func TestMissChange(t *testing.T) {
 	cfg.StartServer(1, 0)
 	cfg.StartServer(2, 0)
 
+	log.Printf("TestMissChange  restart  server0  finished \n")
+
 	for i := 0; i < n; i++ {
+		log.Printf("TestMissChange  check  append  %d \n", i)
 		check(t, ck, ka[i], va[i])
 		x := randstring(20)
 		ck.Append(ka[i], x)
@@ -277,6 +334,8 @@ func TestMissChange(t *testing.T) {
 	cfg.ShutdownServer(0, 1)
 	cfg.ShutdownServer(1, 1)
 	cfg.ShutdownServer(2, 1)
+
+	log.Printf("TestMissChange  shutdown  server1  finished \n")
 
 	cfg.join(0)
 	cfg.leave(2)
@@ -317,7 +376,7 @@ func TestConcurrent1(t *testing.T) {
 		va[i] = randstring(5)
 		ck.Put(ka[i], va[i])
 	}
-
+	log.Printf("TestConcurrent1  finish put \n")
 	var done int32
 	ch := make(chan bool)
 
@@ -331,10 +390,12 @@ func TestConcurrent1(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-
+	log.Printf("TestConcurrent1  finish put append \n")
 	for i := 0; i < n; i++ {
 		go ff(i)
 	}
+
+	log.Printf("TestConcurrent1  start  confge change \n")
 
 	time.Sleep(150 * time.Millisecond)
 	cfg.join(1)
@@ -343,6 +404,8 @@ func TestConcurrent1(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	cfg.leave(0)
 
+
+	log.Printf("TestConcurrent1    ShutdownGroup  \n")
 	cfg.ShutdownGroup(0)
 	time.Sleep(100 * time.Millisecond)
 	cfg.ShutdownGroup(1)
@@ -351,6 +414,7 @@ func TestConcurrent1(t *testing.T) {
 
 	cfg.leave(2)
 
+	log.Printf("TestConcurrent1    Start Group  \n")
 	time.Sleep(100 * time.Millisecond)
 	cfg.StartGroup(0)
 	cfg.StartGroup(1)
@@ -364,11 +428,14 @@ func TestConcurrent1(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
+	log.Printf("TestConcurrent1  finished  confge change \n")
+
 	atomic.StoreInt32(&done, 1)
 	for i := 0; i < n; i++ {
 		<-ch
 	}
 
+	time.Sleep(5 * time.Second)
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
@@ -452,6 +519,10 @@ func TestConcurrent2(t *testing.T) {
 }
 
 func TestUnreliable1(t *testing.T) {
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6070", nil))
+	}()
+
 	fmt.Printf("Test: unreliable 1...\n")
 
 	cfg := make_config(t, 3, true, 100)
@@ -467,8 +538,11 @@ func TestUnreliable1(t *testing.T) {
 	for i := 0; i < n; i++ {
 		ka[i] = strconv.Itoa(i) // ensure multiple shards
 		va[i] = randstring(5)
+		fmt.Printf("Test: unreliable 1 ... put   %d \n", i)
 		ck.Put(ka[i], va[i])
 	}
+
+	fmt.Printf("Test: unreliable 1...  0 -----\n")
 
 	cfg.join(1)
 	cfg.join(2)
@@ -481,6 +555,8 @@ func TestUnreliable1(t *testing.T) {
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
+
+	fmt.Printf("Test: unreliable 1...  1 -----\n")
 
 	cfg.join(0)
 	cfg.leave(1)
