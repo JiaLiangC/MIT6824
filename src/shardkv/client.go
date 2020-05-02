@@ -76,12 +76,15 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.sm = shardmaster.MakeClerk(masters)
 	ck.make_end = make_end
 	// You'll have to add code here.
-	ck.ClientId = <-ClientIdCh
+	//ck.ClientId = nrand()
+	clientIdCh := getClientIdCh()
+	ck.ClientId = <-clientIdCh
+
 	ck.SeqNum = 0
 	ck.config = ck.sm.Query(-1)
 	ck.LeaderId = 0
 
-	DPrintf("shardKv MakeClerk: %+v", ck)
+	DPrintf("shardKv MakeClerk finished: %+v", ck)
 	return ck
 }
 
