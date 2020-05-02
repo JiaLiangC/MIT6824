@@ -705,7 +705,7 @@ func (rf *Raft)ApplyLogEntryDaemon(){
             copy(sendLogs, rf.logs[rf.subIdx(lastIdx+1) : rf.subIdx(rf.commitIndex+1)])
             //DPrintf("[%d-%s]:  in  ApplyLogEntryDaemon sendLogs is %+v ", rf.me, rf, sendLogs)
         }
-
+        rf.mu.Unlock()
 
 
         for i:=0; i< sendLen;i++{
@@ -718,7 +718,7 @@ func (rf *Raft)ApplyLogEntryDaemon(){
             DPrintf("[%d-%s]:  send applyMsg to  applyCh  at term %d, applyMsg: %+v", rf.me, rf, rf.currentTerm, applyMsg)
             //rf.persist()
         }
-        rf.mu.Unlock()
+
     }
 
 }
