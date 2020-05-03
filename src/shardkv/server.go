@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-
 //重启后的，日志回放 如何保证日志回放完成之前不处理数据请求，
 //只要保证 新的请求追加在 raft 日志末尾即可，raft 日志有持久化，重启后读取的也是新的权量的raft日志 ,因为是有序的，等所有前面的日志按个回放结束，新的请求才会被处理
 //TODO 考虑 slice 操作效率问题
@@ -25,14 +24,14 @@ import (
 
 type Op struct {
 	OpType   OpT
-	Args interface{}
-	ClientId 	int64  //客户端ID，为了去重
-	SeqNum 	 int    //请求序列号，去重使用
+	Args     interface{}
+	ClientId int64 //客户端ID，为了去重
+	SeqNum   int   //请求序列号，去重使用
 }
 
 type GC struct {
-	ConfigNum   int
-	Shard int
+	ConfigNum int
+	Shard     int
 }
 
 type ShardKV struct {
@@ -45,40 +44,37 @@ type ShardKV struct {
 	masters      []*labrpc.ClientEnd
 	maxraftstate int // snapshot if log grows this big
 	// Your definitions here.
-	doneCh chan struct{}
-	dbPool    map[int]map[string]string 		//{shardID:{key: value}}
-	historyRequest map[int64]int
-	agreementNotifyCh map[int] chan struct{}
-	snapshotIndex int
-	persister *raft.Persister
-	sm       *shardmaster.Clerk
+	doneCh            chan struct{}
+	dbPool            map[int]map[string]string //{shardID:{key: value}}
+	historyRequest    map[int64]int
+	agreementNotifyCh map[int]chan struct{}
+	snapshotIndex     int
+	persister         *raft.Persister
+	sm                *shardmaster.Clerk
 
-	config   shardmaster.Config
+	config shardmaster.Config
 
-	inShards map[int]map[int]bool 		//{ConfigNum: [shards ]}
+	inShards map[int]map[int]bool //{ConfigNum: [shards ]}
 	//outShards map[int]map[int]int 			//{configNum:{shard: gid}}
 
 	//其实只用存shard id数组即可，但是go 中slice 不好删除，所以用了map
-	garbages map[int]map[int]bool       //{configNum:[shard]}
+	garbages              map[int]map[int]bool //{configNum:[shard]}
 	migrationApplyHistory map[int]map[int]bool //config:Num{shard: bool}
-
 }
 
-
-type  ShardMigrationArgs struct{
-	Shard int
+type ShardMigrationArgs struct {
+	Shard     int
 	ConfigNum int
 }
 
-type  ShardMigrationReply struct{
-	Err string
-	ConfigNum int
-	Shard int
-	ShardData map[string]string
+type ShardMigrationReply struct {
+	Err            string
+	ConfigNum      int
+	Shard          int
+	ShardData      map[string]string
 	HistoryRequest map[int64]int
-	Seqnum int
+	Seqnum         int
 }
-
 
 const Debug = 1
 
@@ -103,14 +99,13 @@ func (s *OpT) toString() string {
 	return strs
 }
 
-
-func( s  *ShardKV) String() string{
-	strs := fmt.Sprintf("%+v",s.config)
-    return "{me:"+strconv.Itoa(s.me)+
-    " || "+"gid:"+strconv.Itoa(s.gid)+
-    " || "+"maxraftstate:"+strconv.Itoa(s.maxraftstate)+
-    " || "+"snapshotIndex:"+strconv.Itoa(s.snapshotIndex)+
-    " || "+"config:"+strs+"}"
+func (s *ShardKV) String() string {
+	strs := fmt.Sprintf("%+v", s.config)
+	return "{me:" + strconv.Itoa(s.me) +
+		" || " + "gid:" + strconv.Itoa(s.gid) +
+		" || " + "maxraftstate:" + strconv.Itoa(s.maxraftstate) +
+		" || " + "snapshotIndex:" + strconv.Itoa(s.snapshotIndex) +
+		" || " + "config:" + strs + "}"
 }
 
 /*设计说明
@@ -127,7 +122,7 @@ func( s  *ShardKV) String() string{
 *6.2 wrong Group 要从出发和返回两个阶段都判断，因为这之间可能发生过配置变更
  */
 
- // be needed again. you are not required to do anything
+// be needed again. you are not required to do anything
 // in Kill(), but it might be convenient to (for example)
 // turn off debug output from this instance.
 //
@@ -174,21 +169,22 @@ func (kv *ShardKV) isShardPending(cmd Op) bool {
 	return ok
 }
 
+//server 端对于过期重复请求，之前是直接false，导致后续大量重复请求，卡住。
+//为什么有过期请求会卡住呢？因为网络不可靠时，请求在apply后 reply中丢失，对方重试就会出现过期请求，这时要同意。
+func (kv *ShardKV) waitForAgree(cmd Op, fillReply func(err Err)) {
 
-func (kv *ShardKV) waitForAgree(cmd Op,  fillReply func(err Err)){
-
-	if _, isLeader := kv.rf.GetState(); !isLeader{
+	if _, isLeader := kv.rf.GetState(); !isLeader {
 		fillReply(ErrWrongLeader)
 		return
 	}
 
-	if !kv.GroupValid(cmd){
+	if !kv.GroupValid(cmd) {
 		DPrintf("ShardKV[%d][%d][%d]: 3.waitForAgree false,Err: WrongGroup return \n", kv.gid, kv.me, kv.config.Num)
 		fillReply(ErrWrongGroup)
 		return
 	}
 
-	if kv.isShardPending(cmd){
+	if kv.isShardPending(cmd) {
 		DPrintf("ShardKV[%d][%d][%d]: 3.waitForAgree false,Err:isShardPending return \n", kv.gid, kv.me, kv.config.Num)
 		fillReply(ErrWrongLeader)
 		return
@@ -199,7 +195,7 @@ func (kv *ShardKV) waitForAgree(cmd Op,  fillReply func(err Err)){
 	kv.mu.Unlock()
 
 	//过期请求就返回 WrongLeader
-	if ok &&  cmd.SeqNum <= latestSeq {
+	if ok && cmd.SeqNum <= latestSeq {
 		fillReply(OK)
 		DPrintf("ShardKV[%d][%d][%d] 3.waitForAgree false,Err: duplicate request. cmd.SeqNum<=latestSeq(%d<=%d) \n", kv.gid, kv.me, kv.config.Num, cmd.SeqNum, latestSeq)
 		return
@@ -238,10 +234,10 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 			kv.mu.Lock()
 			value, ok := kv.dbPool[shard][args.Key]
 			kv.mu.Unlock()
-			if  ok {
+			if ok {
 				reply.Value = value
 				reply.Err = OK
-				DPrintf("ShardKV[%d][%d][%d][%d] 4.GET RPC Finished , kvDB:%+v args:%+v, reply:%+v\n", kv.gid, kv.me,kv.config.Num, kv.dbPool, args, reply)
+				DPrintf("ShardKV[%d][%d][%d][%d] 4.GET RPC Finished , kvDB:%+v args:%+v, reply:%+v\n", kv.gid, kv.me, kv.config.Num, kv.dbPool, args, reply)
 			} else {
 				reply.Err = ErrNoKey
 			}
@@ -254,14 +250,14 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	//1.过滤重复请求 2.等待applyChDaemon 的通知 3.过滤非leader 请求
-	DPrintf("ShardKV[%d][%d][%d] 2.PutAppend RPC Request, args:%+v ", kv.gid, kv.me,kv.config.Num, args)
+	DPrintf("ShardKV[%d][%d][%d] 2.PutAppend RPC Request, args:%+v ", kv.gid, kv.me, kv.config.Num, args)
 	command := Op{OpType: args.OpType, Args: *args, ClientId: args.ClientId, SeqNum: args.SeqNum}
 
 	kv.waitForAgree(command, func(err Err) {
 		if err == OK {
 			reply.WrongLeader = false
 			reply.Err = OK
-			DPrintf("ShardKV[%d][%d][%d][%d] 4.PutAppend RPC Finished , kvDB:%+v args:%+v, reply:%+v\n", kv.gid, kv.me,kv.config.Num, kv.dbPool, args, reply)
+			DPrintf("ShardKV[%d][%d][%d][%d] 4.PutAppend RPC Finished , kvDB:%+v args:%+v, reply:%+v\n", kv.gid, kv.me, kv.config.Num, kv.dbPool, args, reply)
 		} else {
 			reply.Err = err
 			reply.WrongLeader = true
@@ -271,6 +267,8 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 //把日志应用到自己的状态机中
 //去重,验证请求是否合法然后根据请求类型作出不同的动作
+//当 config 快速变化时，如何防止去拉取数据时，对方还没拉取到你要的新的数据
+//1.从configNum控制，2,对方相应时，先等待自己为完成的迁移完成。
 func (kv *ShardKV) ApplyChDaemon() {
 	for {
 		select {
@@ -278,7 +276,7 @@ func (kv *ShardKV) ApplyChDaemon() {
 			return
 		case msg := <-kv.applyCh:
 			if !msg.CommandValid {
-				DPrintf("ShardKV[%d][%d][%d]:ApplyChDaemon ApplySnapshot to DB, msg:%+v \n", kv.gid, kv.me,kv.config.Num, msg)
+				DPrintf("ShardKV:[%d][%d][%d]:ApplyChDaemon ApplySnapshot to DB, msg:%+v \n", kv.gid, kv.me, kv.config.Num, msg)
 				kv.mu.Lock()
 				kv.readSnapshot(msg.Command.([]byte))
 				kvSnapshotData := kv.NewSnapshot(msg.CommandIndex)
@@ -288,45 +286,45 @@ func (kv *ShardKV) ApplyChDaemon() {
 			}
 
 			if msg.Command != nil && msg.CommandIndex > kv.snapshotIndex {
-				DPrintf("ShardKV[%d][%d][%d] ApplyChDaemon:0, msg:%+v \n", kv.gid, kv.me,kv.config.Num, msg)
+				DPrintf("ShardKV:[%d][%d][%d] ApplyChDaemon:0, msg:%+v \n", kv.gid, kv.me, kv.config.Num, msg)
 
 				switch op := msg.Command.(type) {
 				case shardmaster.Config:
-					DPrintf("ShardKV[%d][%d][%d] ApplyChDaemon:1 UpdateShardMigrationInfo start, msg:%+v \n", kv.gid, kv.me,kv.config.Num, msg)
+					DPrintf("ShardKV:[%d][%d][%d] ApplyChDaemon:1 UpdateShardMigrationInfo start, msg:%+v \n", kv.gid, kv.me, kv.config.Num, msg)
 					kv.UpdateShardMigrationInfo(op)
 				case ShardMigrationReply:
-					DPrintf("ShardKV[%d][%d][%d] ApplyChDaemon applyMigration, msg:%+v  op:%+v\n", kv.gid, kv.me,kv.config.Num, msg, op)
+					DPrintf("ShardKV:[%d][%d][%d] ApplyChDaemon applyMigration, msg:%+v  op:%+v\n", kv.gid, kv.me, kv.config.Num, msg, op)
 					kv.applyMigration(op)
 				case GC:
-					DPrintf("ShardKV[%d][%d]:ApplyChDaemon doGarbageCollection, msg:%+v  op:%+v\n", kv.gid, kv.me, msg, op)
+					DPrintf("ShardKV:[%d][%d]:ApplyChDaemon doGarbageCollection, msg:%+v  op:%+v\n", kv.gid, kv.me, msg, op)
 					kv.doGarbageCollection(op)
 				case Op:
 					// 必须严格过滤重复请求，不然会导致数据不一致
-					DPrintf("ShardKV[%d][%d][%d] ApplyChDaemon  Op Operation, msg:%v  op:%+v\n", kv.gid, kv.me,kv.config.Num, msg, op.Args)
-
+					DPrintf("ShardKV:[%d][%d][%d] ApplyChDaemon  Op Operation, msg:%v  op:%+v\n", kv.gid, kv.me, kv.config.Num, msg, op.Args)
 					kv.mu.Lock()
-					kv.handleSnapshot(msg.CommandIndex)
 					latestSeq, ok := kv.historyRequest[op.ClientId]
-					if !ok || op.SeqNum > latestSeq{
-						DPrintf("ShardKV[%d][%d][%d] ApplyChDaemon apply start, msg:%+v \n", kv.gid, kv.me,kv.config.Num, msg)
+					if !ok || op.SeqNum > latestSeq {
 						kv.updateKv(op.OpType, op.Args)
 						kv.historyRequest[op.ClientId] = op.SeqNum
-						// 如果是请求就回应请求，如果是回放日志就读不到通道，不回应请求。
-						if ch, ok := kv.agreementNotifyCh[msg.CommandIndex]; ok && ch != nil {
-							close(ch)
-							delete(kv.agreementNotifyCh, msg.CommandIndex)
-						}
-						DPrintf("ShardKV:[%d][%d][%d] ApplyChDaemon  Got log agreement, apply successfully to state machine,op is %+v kvdb is : %+v", kv.gid, kv.me,kv.config.Num, op, kv.dbPool)
-
+						DPrintf("ShardKV:[%d][%d][%d] ApplyChDaemon  Got log agreement, apply successfully to state machine,op is %+v kvdb is : %+v", kv.gid, kv.me, kv.config.Num, op, kv.dbPool)
 					} else {
-						DPrintf("ShardKV:[%d][%d][%d] ApplyChDaemon Got log agreement,op is %+v kvdb is : %+v,op.SeqNum(%d) >= latestSeq(%d)", kv.gid, kv.me,kv.config.Num, op, kv.dbPool, op.SeqNum, latestSeq)
+						DPrintf("ShardKV:[%d][%d][%d] ApplyChDaemon Got log agreement,op is %+v kvdb is : %+v,op.SeqNum(%d) >= latestSeq(%d)", kv.gid, kv.me, kv.config.Num, op, kv.dbPool, op.SeqNum, latestSeq)
 					}
 					kv.mu.Unlock()
 				}
 
+				kv.handleSnapshot(msg.CommandIndex)
 
-			}else {
-				DPrintf("ShardKV[%d][%d][%d] ApplyChDaemon:000 error, msg:%+v \n", kv.gid, kv.me,kv.config.Num, msg)
+				// 如果是请求就回应请求，如果是回放日志就读不到通道，不回应请求。
+				kv.mu.Lock()
+				if ch, ok := kv.agreementNotifyCh[msg.CommandIndex]; ok && ch != nil {
+					close(ch)
+					delete(kv.agreementNotifyCh, msg.CommandIndex)
+				}
+				kv.mu.Unlock()
+
+			} else {
+				DPrintf("ShardKV[%d][%d][%d] ApplyChDaemon:000 error, msg:%+v \n", kv.gid, kv.me, kv.config.Num, msg)
 			}
 		}
 	}
@@ -344,7 +342,7 @@ func (kv *ShardKV) doGarbageCollection(arg GC) {
 }
 
 func (kv *ShardKV) updateKv(t OpT, args interface{}) {
-	DPrintf("ShardKV[%d][%d][%d] updateKv  start, Op:%+v args:%+v \n", kv.gid, kv.me,kv.config.Num, t, args)
+	DPrintf("ShardKV[%d][%d][%d] updateKv  start, Op:%+v args:%+v \n", kv.gid, kv.me, kv.config.Num, t, args)
 	switch t {
 	case Put:
 		cmd := args.(PutAppendArgs)
@@ -354,7 +352,7 @@ func (kv *ShardKV) updateKv(t OpT, args interface{}) {
 			kv.dbPool[shard] = make(map[string]string)
 		}
 		kv.dbPool[shard][cmd.Key] = cmd.Value
-		DPrintf("ShardKV[%d][%d][%d] updateKv  finished, Op:%+v args:%+v , kv db:%+v\n", kv.gid, kv.me,kv.config.Num, t, args, kv.dbPool)
+		DPrintf("ShardKV[%d][%d][%d] updateKv  finished, Op:%+v args:%+v , kv db:%+v\n", kv.gid, kv.me, kv.config.Num, t, args, kv.dbPool)
 	case Append:
 		cmd := args.(PutAppendArgs)
 		shard := key2shard(cmd.Key)
@@ -362,7 +360,7 @@ func (kv *ShardKV) updateKv(t OpT, args interface{}) {
 			kv.dbPool[shard] = make(map[string]string)
 		}
 		kv.dbPool[shard][cmd.Key] += cmd.Value
-		DPrintf("ShardKV[%d][%d][%d] updateKv  finished, Op:%+v args:%+v ,kv db:%+v \n", kv.gid, kv.me,kv.config.Num, t, args, kv.dbPool)
+		DPrintf("ShardKV[%d][%d][%d] updateKv  finished, Op:%+v args:%+v ,kv db:%+v \n", kv.gid, kv.me, kv.config.Num, t, args, kv.dbPool)
 	}
 }
 
@@ -375,13 +373,11 @@ func (kv *ShardKV) handleSnapshot(index int) {
 		return
 	}
 
-	DPrintf("ShardKV:[%d][%d][%d] HandleSnapshot start snapshot kv.persister.RaftStateSize() > kv.maxraftstate*10/9(%d > %d)", kv.gid, kv.me,kv.config.Num, kv.persister.RaftStateSize(), kv.maxraftstate*10/9)
+	DPrintf("ShardKV:[%d][%d][%d] HandleSnapshot start snapshot kv.persister.RaftStateSize() > kv.maxraftstate*10/9(%d > %d)", kv.gid, kv.me, kv.config.Num, kv.persister.RaftStateSize(), kv.maxraftstate*10/9)
 
 	kvSnapshotData := kv.NewSnapshot(index)
 	kv.rf.TakeSnapshot(index, kvSnapshotData)
 }
-
-
 
 func (kv *ShardKV) readSnapshot(data []byte) {
 	if data == nil || len(data) < 1 {
@@ -400,6 +396,10 @@ func (kv *ShardKV) readSnapshot(data []byte) {
 	d.Decode(&kv.inShards)
 	d.Decode(&kv.config)
 	DPrintf("ShardKV:[%d][%d]:readSnapshot finished . config.Num(%d) , kv.dbPool:%+v", kv.gid, kv.me, kv.config.Num, kv.dbPool)
+
+	if kv.config.Num!=0{
+		go kv.restartMigration()
+	}
 
 }
 
@@ -423,8 +423,6 @@ func (kv *ShardKV) NewSnapshot(index int) []byte {
 //1. 如果snapshot中不加入Inshards,当shard拉取了一般宕机重启后，会丢失未拉取的数据
 //2. snapshot 记录了Inshard, 当所有节点都拉取完毕后，重启集群发生，会读到旧的Inshards
 
-
-
 func get_shards_by_gid(shards [shardmaster.NShards]int, gid int) []int {
 	//DPrintf("get_shards_by_gid shards:%+v gid:%d \n", shards, gid)
 	shardIds := make([]int, 0)
@@ -446,7 +444,6 @@ func contains(s []int, e int) bool {
 	return false
 }
 
-
 //因为Check config 存在重复写入raft的可能性，所以要过滤,传进来的ConfigNum必须大于当前的Config(过滤Check config的重复写入)
 //对于从snapshot中恢复出来的时候，会check config并且写入老得请求，但是在这里会被过滤掉。
 //TODO 这里有没有必要把OutShard做一个备份，如果对方还没拉取完对应的Shard,但是 这部分Shard的数据变动了，
@@ -459,7 +456,7 @@ func (kv *ShardKV) UpdateShardMigrationInfo(config shardmaster.Config) {
 		return
 	}
 
-	if config.Num != kv.config.Num+1{
+	if config.Num != kv.config.Num+1 {
 		DPrintf("ShardKV:[%d][%d][%d] UpdateShardMigrationInfo config.Num:%d, kv.config.Num:%d", kv.gid, kv.me, kv.config.Num, config.Num, kv.config.Num)
 		panic("kv.configs.Num+1 != newConfig.Num")
 		return
@@ -484,16 +481,16 @@ func (kv *ShardKV) UpdateShardMigrationInfo(config shardmaster.Config) {
 		}
 	}
 
-	DPrintf("ShardKV:[%d][%d][%d] UpdateShardMigrationInfo finished---------- ")
+	DPrintf("ShardKV:[%d][%d][%d] UpdateShardMigrationInfo finished", kv.gid, kv.me, kv.config.Num)
 	//For Leader Pull Shards
 	if _, isLeader := kv.rf.GetState(); isLeader {
-		DPrintf("ShardKV:[%d][%d][%d] UpdateShardMigrationInfo finished11111---------- ")
-		if shards,ok := kv.inShards[oldConfig.Num];ok && len(shards)!=0{
+		if shards, ok := kv.inShards[oldConfig.Num]; ok && len(shards) != 0 {
+			DPrintf("ShardKV:[%d][%d][%d] UpdateShardMigrationInfo finished then try to pull shard, oldConfig.Num:%d", kv.gid, kv.me, kv.config.Num, oldConfig.Num)
 			go kv.PullShard(oldConfig.Num)
 			//kv.PullShard(oldConfig.Num)
 		}
 		return
-	}else {
+	} else {
 		DPrintf("ShardKV:[%d][%d][%d] UpdateShardMigrationInfo  not leader ++++++++++++++")
 	}
 }
@@ -509,7 +506,6 @@ func (kv *ShardKV) UpdateShardMigrationInfo(config shardmaster.Config) {
 
 //BUG snapshot 时记录了 inShard, 当inShard 变更时没有更新snapshot的值，导致集群重启后，拉取到了错误的数据
 
-
 //1. 要干掉比自己当前任期小的Inshards数据, 否则会导致后续的数据进不来，因为Inshards始终不为空
 //2. PullShard中有多次写入的数据，或者集群重启后老的InShards 这里根据 ConfigNum过滤部分，后续Shard Data Migration处也要过滤
 //3. Pull Shard 这里保证Shard 的有序性，其实很难,  PullShard 是根据Inshard中 ConfigNum作为Key排序来保证写入日志的有序性，
@@ -519,29 +515,27 @@ func (kv *ShardKV) UpdateShardMigrationInfo(config shardmaster.Config) {
 // 这里要避免 CheckConfig 写入后，会过滤比自己小的config，因为日志的有序性，这里不用担心 snapshot 后的Config问题
 //TODO 突然宕机后，未完成的PullShard
 
-
 //失败了重复请求
 func (kv *ShardKV) PullShard(oldConfigNum int) {
 
 	//kv.mu.Lock()
 	//defer kv.mu.Unlock()
 	DPrintf("ShardKV:[%d][%d][%d] PullShard in kv start:%+v ", kv.gid, kv.me, kv.config.Num, kv)
-
 	//按照config num 的顺序写入日志
 
 	oldConfig := kv.sm.Query(oldConfigNum)
 	taskShards := kv.inShards[oldConfigNum]
 
-	for shard,_ := range taskShards {
+	for shard, _ := range taskShards {
 		go func(shard int, cfg shardmaster.Config) {
 
 			args := ShardMigrationArgs{Shard: shard, ConfigNum: cfg.Num}
 			gid := cfg.Shards[shard]
 
 			//请求失败后for 不断拉取
-			for{
-				select{
-				case <- kv.doneCh:
+			for {
+				select {
+				case <-kv.doneCh:
 					return
 				default:
 				}
@@ -553,31 +547,28 @@ func (kv *ShardKV) PullShard(oldConfigNum int) {
 				for _, server := range cfg.Groups[gid] {
 					srv := kv.make_end(server)
 					reply := ShardMigrationReply{}
-					DPrintf("ShardKV:[%d][%d][%d] PullShard start kv:%+v args:%+v,kv.inShards:%+v", kv.gid, kv.me, kv.config.Num, kv, args, kv.inShards)
-
+					DPrintf("ShardKV:[%d][%d][%d] PullShard start kv:%+v args:%+v,kv.inShards:%+v server:%+v", kv.gid, kv.me, kv.config.Num, kv, args, kv.inShards, server)
 
 					//wrong leader 重试， 对方config 比当前小时，返回wrong leader重试。
 					if ok := srv.Call("ShardKV.ShardMigration", &args, &reply); ok && reply.Err == OK {
-						//DPrintf("ShardKV:[%d][%d][%d] PullShard  finished successfully kv:%+v args:%+v, reply:%+v", kv.gid, kv.me, kv, args, reply)
 						if _, isLeader := kv.rf.GetState(); !isLeader {
 							return
 						}
 
 						kv.mu.Lock()
 						//当前Kv的config没有更新, 并且pull Shard没有完成，防止重复PullShard
-						if kv.config.Num == oldConfigNum+1 && !kv.isMigrationDone(){
+						if kv.config.Num == oldConfigNum+1 && !kv.isMigrationDone() {
 							DPrintf("ShardKV:[%d][%d][%d] PullShard finished kv:%+v args:%+v,kv.inShards:%+v", kv.gid, kv.me, kv.config.Num, kv, args, kv.inShards)
 							kv.rf.Start(reply)
 						}
 						kv.mu.Unlock()
 						return
 					} else {
-						DPrintf("ShardKV:[%d][%d][%d]:PullShard  failed  kv:%+v args:%+v, reply:%+v  ok:%+v", kv.gid, kv.me,kv.config.Num, kv, args, reply, ok)
+						DPrintf("ShardKV:[%d][%d][%d]:PullShard  failed  kv:%+v args:%+v, reply:%+v  ok:%+v", kv.gid, kv.me, kv.config.Num, kv, args, reply, ok)
 					}
-					time.Sleep(100*time.Millisecond)
+					time.Sleep(100 * time.Millisecond)
 				}
 			}
-
 
 		}(shard, oldConfig)
 	}
@@ -587,9 +578,9 @@ func (kv *ShardKV) PullShard(oldConfigNum int) {
 //ShardMigration RPC
 //收到RPC 后发送对应的数据给请求者
 //这里要过滤和清理集群重启后从Snapshot中读取到的旧的Shard发来的数据。
-//
+//TODO 这里对方重复的Pullshard 请求实际上还是会成功的，只不过在applyMigration 里会过滤掉
 func (kv *ShardKV) ShardMigration(args *ShardMigrationArgs, reply *ShardMigrationReply) {
-	DPrintf("ShardKV:[%d][%d]:ShardMigration in, kv:%+v args:%+v", kv.gid, kv.me, kv, args)
+	DPrintf("ShardKV:[%d][%d][%d]:ShardMigration in, args:%+v", kv.gid, kv.me, kv.config.Num, args)
 	reply.ConfigNum = args.ConfigNum
 	reply.Shard = args.Shard
 	if _, isLeader := kv.rf.GetState(); !isLeader {
@@ -598,16 +589,27 @@ func (kv *ShardKV) ShardMigration(args *ShardMigrationArgs, reply *ShardMigratio
 	}
 
 	kv.mu.Lock()
-
+	defer kv.mu.Unlock()
 
 	//args.ConfigNum 是config更新前的一个config, 如果kv的当前config小于请求者当前的Config,说明还没更新到，然后延迟，返回wrongleader，等待下次请求
+	// args.ConfigNum+1 等于发送者的任期，所以至少等到发送者任期和我一样
+	//至于我大于对方多个任期时，拉取的数据会不会不一致，不会，被拉取shard的更新已经被pullShard指向了新的shard
+	//
 	if args.ConfigNum+1 > kv.config.Num {
 		reply.Err = ErrWrongLeader
-		kv.mu.Unlock()
+		DPrintf("ShardKV:[%d][%d][%d]:ShardMigration PostPone=== args.ConfigNum+1 > kv.config.Num, args:%+v, kv.inShards:%+v", kv.gid, kv.me, kv.config.Num, args, kv.inShards)
 		return
 	}
 
-	DPrintf("ShardKV:[%d][%d]:ShardMigration start, kv:%+v args:%+v", kv.gid, kv.me, kv, args)
+	//其次要等待我拉取完成,因为如果config 快速更新，对方要的数据恰好是我还没拉取的数据，就会拉取到脏数据
+	//如果对方要的shard 在inshard中才拒绝，不在就放行, 否则，如果A和B A需要B的shard, B 需要A的shard, 互相未完成，导致互相阻塞
+	//args.Shard
+	_, ok := kv.inShards[args.ConfigNum][args.Shard]
+	if !kv.isMigrationDone() && ok {
+		reply.Err = ErrWrongLeader
+		DPrintf("ShardKV:[%d][%d][%d]:ShardMigration PostPone==========, args:%+v, kv.inShards:%+v", kv.gid, kv.me, kv.config.Num, args, kv.inShards)
+		return
+	}
 
 	shardData := make(map[string]string)
 	for k, v := range kv.dbPool[args.Shard] {
@@ -615,14 +617,54 @@ func (kv *ShardKV) ShardMigration(args *ShardMigrationArgs, reply *ShardMigratio
 	}
 
 	historyRequest := make(map[int64]int)
-	for client, seqNum := range kv.historyRequest{
+	for client, seqNum := range kv.historyRequest {
 		historyRequest[client] = seqNum
 	}
 	DPrintf("ShardKV:[%d][%d]:ShardMigration start, kv.historyRequest:%+v historyRequest:%+v", kv.gid, kv.me, kv.historyRequest, historyRequest)
 	reply.Err = OK
 	reply.ShardData = shardData
 	reply.HistoryRequest = historyRequest
+
+}
+
+
+//做了快照后，正 pullshard 时，宕机导致 shard 拉取没结束，导致最后数据缺失，所以要重新拉取
+//TODO 重新拉取会不会导致 inshard 重复
+//如果 重复pullshard 请求，config变更时这里会停止
+
+func (kv *ShardKV) restartMigration() {
+	kv.mu.Lock()
+
+	_, ok := kv.inShards[kv.config.Num-1]
+	curConfigNum := kv.config.Num
+	oldConfigNum := curConfigNum-1
+
 	kv.mu.Unlock()
+
+	if curConfigNum == 0 || !ok {
+		return
+	}
+
+	for {
+		select {
+		case <-kv.doneCh:
+			return
+		default:
+			kv.mu.Lock()
+			curKvConfigNum := kv.config.Num
+			kv.mu.Unlock()
+
+			if curKvConfigNum != oldConfigNum+1 {
+				return
+			}
+			if _, isLeader := kv.rf.GetState(); isLeader {
+				go kv.PullShard(oldConfigNum)
+			}
+			DPrintf("ShardKV:[%d][%d][%d]:restartMigration , kv.inshards:%+v", kv.gid, kv.me,kv.config.Num, kv.inShards)
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+
 }
 
 // 收到来自 ShardMigration RPC 请求的leader 把reply 写入日志，
@@ -644,8 +686,8 @@ func (kv *ShardKV) applyMigration(replyData ShardMigrationReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	DPrintf("ShardKV:[%d][%d]:applyMigration start, kv:%+v replyData:%+v", kv.gid, kv.me, kv, replyData)
-	if replyData.ConfigNum+1 != kv.config.Num || kv.isMigrationDone(){
+	DPrintf("ShardKV:[%d][%d][%d]:applyMigration start, kv:%+v replyData:%+v", kv.gid, kv.me,kv.config.Num, kv, replyData)
+	if replyData.ConfigNum+1 != kv.config.Num || kv.isMigrationDone() {
 		return
 	}
 
@@ -678,13 +720,13 @@ func (kv *ShardKV) applyMigration(replyData ShardMigrationReply) {
 		kv.dbPool[replyData.Shard][k] = v
 	}
 
-	for client_id,seqNum := range replyData.HistoryRequest  {
-		original_seq,ok :=  kv.historyRequest[client_id]
-		if ok{
-			if  seqNum > original_seq{
-				kv.historyRequest[client_id]=seqNum
+	for client_id, seqNum := range replyData.HistoryRequest {
+		original_seq, ok := kv.historyRequest[client_id]
+		if ok {
+			if seqNum > original_seq {
+				kv.historyRequest[client_id] = seqNum
 			}
-		}else {
+		} else {
 			kv.historyRequest[client_id] = seqNum
 		}
 	}
@@ -699,9 +741,9 @@ func (kv *ShardKV) applyMigration(replyData ShardMigrationReply) {
 
 //GarbageCollecttion RPC
 //进行垃圾回收，干掉已经应用了的 shard data, leader收到GC 请求后后写入日志,然后等待apply后真正执行GC操作
-func (kv *ShardKV)GarbageCollecttion(args *ShardMigrationArgs, reply *ShardMigrationReply){
+func (kv *ShardKV) GarbageCollecttion(args *ShardMigrationArgs, reply *ShardMigrationReply) {
 	reply = &ShardMigrationReply{ConfigNum: args.ConfigNum, Shard: args.Shard}
-	if _, isLeader := kv.rf.GetState();!isLeader{
+	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	}
@@ -722,25 +764,25 @@ func (kv *ShardKV)GarbageCollecttion(args *ShardMigrationArgs, reply *ShardMigra
 }
 
 //clear remote shard that already pulled
-func (kv *ShardKV)tryGarbageCollecttion(){
-	if _, isLeader := kv.rf.GetState();!isLeader || len(kv.garbages)==0{
+func (kv *ShardKV) tryGarbageCollecttion() {
+	if _, isLeader := kv.rf.GetState(); !isLeader || len(kv.garbages) == 0 {
 		return
 	}
 
-	for configNum, shards := range kv.garbages{
+	for configNum, shards := range kv.garbages {
 		config := kv.sm.Query(configNum)
 
-		for shard,_ := range shards{
+		for shard, _ := range shards {
 
-			go func(cfg shardmaster.Config){
-				args :=ShardMigrationArgs{Shard: shard, ConfigNum: cfg.Num}
+			go func(cfg shardmaster.Config) {
+				args := ShardMigrationArgs{Shard: shard, ConfigNum: cfg.Num}
 				gid := cfg.Shards[shard]
-				for _,server := range kv.config.Groups[gid]{
+				for _, server := range kv.config.Groups[gid] {
 					srv := kv.make_end(server)
 					reply := ShardMigrationReply{}
-					if ok := srv.Call("ShardKV.GarbageCollecttion", &args, &reply); ok && reply.Err == OK{
-						delete(kv.garbages[configNum],shard)
-						if len(kv.garbages[configNum])==0{
+					if ok := srv.Call("ShardKV.GarbageCollecttion", &args, &reply); ok && reply.Err == OK {
+						delete(kv.garbages[configNum], shard)
+						if len(kv.garbages[configNum]) == 0 {
 							delete(kv.garbages, configNum)
 						}
 					}
@@ -759,18 +801,18 @@ func (kv *ShardKV) isMigrationDone() bool {
 //每次间隔300ms 去拉取一次 master端的config信息,拉取到以后写入日志
 //1.每隔300ms拉取一次Config,只拉取比自己大一个的Config
 //2.拉取到的Config写入日志，存在重复写入同一个Config的可能性
-func (kv *ShardKV)CheckConfig() {
+func (kv *ShardKV) CheckConfig() {
 	//BUG fix 没有用锁保护下面的读取  kv.config.Num，导致拉取到了错误的config num
 	_, isLeader := kv.rf.GetState()
 	kv.mu.Lock()
-	if !isLeader || !kv.isMigrationDone(){
+	if !isLeader || !kv.isMigrationDone() {
 		kv.mu.Unlock()
 		return
 	}
 
 	DPrintf("ShardKV:[%d][%d][%d]:CheckConfig start.", kv.gid, kv.me, kv.config.Num)
 
-	nextConfigNum := kv.config.Num+1
+	nextConfigNum := kv.config.Num + 1
 	kv.mu.Unlock()
 
 	newConfig := kv.sm.Query(nextConfigNum)
@@ -778,7 +820,6 @@ func (kv *ShardKV)CheckConfig() {
 		DPrintf("ShardKV:[%d][%d][%d]:CheckConfig CONFIG CHANGED. config:%+v new_config:%+v", kv.gid, kv.me, kv.config.Num, newConfig)
 		kv.rf.Start(newConfig)
 	}
-
 
 }
 
@@ -868,7 +909,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 }
 
 //问题1，check config 设置每次读取比当前大的一个config,不会读取最新的config
-
+//问题2 集群重启后导致数据异常
 
 /*
 * leader: CheckConfig(周期性检查配置变化)  启动时，启动一个线程专门定时拉取config, confignum == currentConfignum+1 && isMigrationDone,成功后写入日志
