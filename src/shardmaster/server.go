@@ -60,6 +60,8 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 
+
+//applySuccess 返回前，出了问题,
 func (sm *ShardMaster) waitForAgree(cmd Op,  fillReply func(success bool)){
 	if _, isLeader := sm.rf.GetState();!isLeader{
 		DPrintf("ShardMaster[%d]:3.waitForAgree false,WrongLeader \n", sm.me)
@@ -73,24 +75,10 @@ func (sm *ShardMaster) waitForAgree(cmd Op,  fillReply func(success bool)){
 	if ok{
 		//过期请求就返回 WrongLeader
 		if  cmd.SeqNum <= latestSeq  {
-			fillReply(false)
+			fillReply(true)
 			DPrintf("ShardMaster[%d]:3.waitForAgree false,cmd.SeqNum <= latestSeq(%d<=%d) \n", sm.me,cmd.SeqNum,latestSeq)
 			return
 		}
-
-		//if  cmd.SeqNum > latestSeq{
-		//	//fillReply(true)
-		//	sm.mu.Lock()
-		//	sm.historyRequest[cmd.ClientId] = cmd.SeqNum
-		//	//DPrintf("ShardMaster[%d]:3.waitForAgree false,cmd.SeqNum <= latestSeq(%d<=%d) \n", sm.me,cmd.SeqNum,latestSeq)
-		//	sm.mu.Unlock()
-		//	// return
-		//}
-
-	}else{
-		//sm.mu.Lock()
-		//sm.historyRequest[cmd.ClientId] = cmd.SeqNum
-		//sm.mu.Unlock()
 	}
 
 	CommandIndex, term, _ := sm.rf.Start(cmd)
@@ -100,18 +88,12 @@ func (sm *ShardMaster) waitForAgree(cmd Op,  fillReply func(success bool)){
 	sm.notifyChs[CommandIndex] = notifyCh
 	sm.mu.Unlock()
 	//这里设计一个超时
-
-
-	//TODO  bug 这里加了 去重复的请求，当请求在server 端口成功，但是在返回之前这里超时了，就会被设置为wrong leader，
+	//TODO  bugFix 这里加了 去重复的请求，当请求在server 端口成功，但是在返回之前这里超时了，就会被设置为wrong leader，
 	//TODO 但是 history request已经写入，就会阻止后续的请求导致卡死。
 
 	select{
 	case <-sm.doneCh:
 		return
-	//case <- time.After(300*time.Millisecond):
-	//	DPrintf("ShardMaster[%d]:3.waitForAgree false, timeout , \n", sm.me)
-	//	fillReply(false)
-	//	return
 	case <-notifyCh:
 		if currentTerm, isLeader := sm.rf.GetState();!isLeader || term!=currentTerm {
 			DPrintf("ShardMaster[%d]:3.waitForAgree false,WrongLeader \n", sm.me)
@@ -140,10 +122,7 @@ func (sm *ShardMaster) Join(args *JoinArgs, reply *JoinReply) {
 			reply.WrongLeader = true
 		}
 	})
-
-
 }
-
 
 
 func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
@@ -157,7 +136,6 @@ func (sm *ShardMaster) Leave(args *LeaveArgs, reply *LeaveReply) {
 		}else{
 			reply.WrongLeader = true
 		}
-		
 	})
 }
 
@@ -179,6 +157,7 @@ func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	// Your code here.
 	DPrintf("ShardMaster[%d]:2.Query  receive Query RPC Request, args:%+v ", sm.me, args)
+
 	command := Op{OpType: Query, Args: *args, ClientId: args.ClientId, SeqNum: args.SeqNum}
 	sm.waitForAgree(command,func(success bool){
 		DPrintf("ShardMaster[%d]:2.Query  receive Query RPC Request, command:%+v ,success:%v \n", sm.me, command, success)
@@ -192,7 +171,6 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 		}else{
 			reply.WrongLeader=true
 		}
-		
 	})
 }
 
@@ -223,30 +201,29 @@ func (sm *ShardMaster) ApplyChDaemon(){
 			case <- sm.doneCh:
 				return
 			case msg:= <-sm.applyCh:
-					if msg.CommandValid && msg.Command!=nil{
-						op := msg.Command.(Op)
-						DPrintf("ShardMaster[%d]:ApplyChDaemon, msg:%v  op:%v\n", sm.me, msg,op.Args)
-						sm.mu.Lock()
-						latestSeq,ok := sm.historyRequest[op.ClientId]
-						sm.mu.Unlock()
+				if msg.CommandValid && msg.Command != nil{
+					op := msg.Command.(Op)
+					DPrintf("ShardMaster[%d]:ApplyChDaemon, msg:%v  op:%v\n", sm.me, msg,op.Args)
 
-						if !ok || op.SeqNum >= latestSeq{
-							DPrintf("ShardMaster[%d]:ApplyChDaemon apply success, msg:%v \n", sm.me, msg)
+					sm.mu.Lock()
 
-							sm.mu.Lock()
-							sm.historyRequest[op.ClientId] = op.SeqNum
-							sm.mu.Unlock()
+					latestSeq,ok := sm.historyRequest[op.ClientId]
 
-							sm.updateConfig(op.OpType, op.Args)
-							sm.mu.Lock()
-							sm.historyRequest[op.ClientId] = op.SeqNum
-							if ch, ok := sm.notifyChs[msg.CommandIndex];ok && ch!=nil{
-								close(ch)
-								delete(sm.notifyChs, msg.CommandIndex)
-							}
-							sm.mu.Unlock()
-						}
+					if !ok || op.SeqNum > latestSeq{
+						DPrintf("ShardMaster[%d]:ApplyChDaemon apply success, msg:%v \n", sm.me, msg)
+						sm.historyRequest[op.ClientId] = op.SeqNum
+						sm.updateConfig(op.OpType, op.Args)
+						sm.historyRequest[op.ClientId] = op.SeqNum
 					}
+
+					//这里NotifyCh要和更新kv的操作分开，因为如果是重复请求，可以返回成功，通知对方
+					if ch, ok := sm.notifyChs[msg.CommandIndex];ok && ch!=nil{
+						close(ch)
+						delete(sm.notifyChs, msg.CommandIndex)
+					}
+
+					sm.mu.Unlock()
+				}
 			}
 		}
 	}()
@@ -272,10 +249,8 @@ func (sm *ShardMaster) doJoin(args JoinArgs){
 	//shards /all groups 
 	DPrintf("ShardMaster[%d]:doJoin  start, JoinArgs:%v \n", sm.me, args)
 	newConfig := &Config{} 
-	sm.mu.Lock()
 	//拷贝最新的config到新join的config
 	sm.copyConfig(-1, newConfig)
-	sm.mu.Unlock()
 	newConfig.Num+=1
 
 	keys := make([]int,0)
@@ -288,7 +263,6 @@ func (sm *ShardMaster) doJoin(args JoinArgs){
 	}
 
 	//keys 是 group_id， 全部加入hash 环
-	sm.mu.Lock()
 	sm.consistentHashMap.Add(keys...)
 	var new_shards [NShards]int
 	//在加入了新的hash key 后，重新计算算出所有的Shards 的hash,找到落在哪个group上
@@ -303,7 +277,6 @@ func (sm *ShardMaster) doJoin(args JoinArgs){
 	sm.rebalance(newConfig)
 	sm.configs = append(sm.configs,*newConfig)
 	DPrintf("ShardMaster[%d]:doJoin finished, newConfig:%v \n", sm.me, newConfig)
-	sm.mu.Unlock()
 
 }
 
@@ -316,9 +289,7 @@ func (sm *ShardMaster) doLeave(args LeaveArgs){
 	DPrintf("ShardMaster[%d]:doLeave  start, JoinArgs:%v \n", sm.me, args)
 
 	newConfig := &Config{}
-	sm.mu.Lock()
 	sm.copyConfig(-1, newConfig)
-	sm.mu.Unlock()
 	newConfig.Num += 1
 
 	for _,k := range args.GIDs{
@@ -326,7 +297,6 @@ func (sm *ShardMaster) doLeave(args LeaveArgs){
 	}
 
 	//keys 是 group_id， 全部删除hash 环
-	sm.mu.Lock()
 	sm.consistentHashMap.Remove(args.GIDs...)
 
 	var new_shards [NShards] int
@@ -342,8 +312,6 @@ func (sm *ShardMaster) doLeave(args LeaveArgs){
 	sm.rebalance(newConfig)
 	sm.configs = append(sm.configs,*newConfig)
 	DPrintf("ShardMaster[%d]:doLeave finished, newConfig:%v   \n", sm.me, newConfig)
-	sm.mu.Unlock()
-
 }
 
 func (sm *ShardMaster) doMove(args MoveArgs){
@@ -353,13 +321,11 @@ func (sm *ShardMaster) doMove(args MoveArgs){
 	//考虑第一分配没数据时的默认config处理和第二次分配，第三次分配
 
 	newConfig := &Config{} 
-	sm.mu.Lock()
 	sm.copyConfig(-1, newConfig)
 	
 	newConfig.Num += 1
 	newConfig.Shards[args.Shard] = args.GID
 	sm.configs = append(sm.configs,*newConfig)
-	sm.mu.Unlock()
 	DPrintf("ShardMaster[%d]:doMove finished, newConfig:%v   \n", sm.me, newConfig)
 }
 

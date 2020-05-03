@@ -21,6 +21,8 @@ import (
 //TODO 网络不稳定时的丢包问题，丢包后seqnum 被加1，导致后续的重试无法通过去重操作
 //日志回放结束后 又做了更新config的操作导致重复拉取的错误的旧的 shard 数据  // 在configNum 3的时候就处理了操作，日志没回放出来
 
+//锁和channel 导致的死锁
+
 type Op struct {
 	OpType   OpT
 	Args interface{}
@@ -198,7 +200,7 @@ func (kv *ShardKV) waitForAgree(cmd Op,  fillReply func(err Err)){
 
 	//过期请求就返回 WrongLeader
 	if ok &&  cmd.SeqNum <= latestSeq {
-		fillReply(ErrWrongLeader)
+		fillReply(OK)
 		DPrintf("ShardKV[%d][%d][%d] 3.waitForAgree false,Err: duplicate request. cmd.SeqNum<=latestSeq(%d<=%d) \n", kv.gid, kv.me, kv.config.Num, cmd.SeqNum, latestSeq)
 		return
 	}
@@ -239,7 +241,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 			if  ok {
 				reply.Value = value
 				reply.Err = OK
-				DPrintf("ShardKV[%d][%d][%d][%d] 4.GET RPC Finished, kv:%+v , kvDB:%+v args:%+v, reply:%+v\n", kv.gid, kv.me,kv.config.Num, kv, kv.dbPool, args, reply)
+				DPrintf("ShardKV[%d][%d][%d][%d] 4.GET RPC Finished , kvDB:%+v args:%+v, reply:%+v\n", kv.gid, kv.me,kv.config.Num, kv.dbPool, args, reply)
 			} else {
 				reply.Err = ErrNoKey
 			}
@@ -259,7 +261,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		if err == OK {
 			reply.WrongLeader = false
 			reply.Err = OK
-			DPrintf("ShardKV[%d][%d][%d][%d] 4.PutAppend RPC Finished, kv:%+v , kvDB:%+v args:%+v, reply:%+v\n", kv.gid, kv.me,kv.config.Num, kv, kv.dbPool, args, reply)
+			DPrintf("ShardKV[%d][%d][%d][%d] 4.PutAppend RPC Finished , kvDB:%+v args:%+v, reply:%+v\n", kv.gid, kv.me,kv.config.Num, kv.dbPool, args, reply)
 		} else {
 			reply.Err = err
 			reply.WrongLeader = true
@@ -288,8 +290,6 @@ func (kv *ShardKV) ApplyChDaemon() {
 			if msg.Command != nil && msg.CommandIndex > kv.snapshotIndex {
 				DPrintf("ShardKV[%d][%d][%d] ApplyChDaemon:0, msg:%+v \n", kv.gid, kv.me,kv.config.Num, msg)
 
-
-				kv.handleSnapshot(msg.CommandIndex)
 				switch op := msg.Command.(type) {
 				case shardmaster.Config:
 					DPrintf("ShardKV[%d][%d][%d] ApplyChDaemon:1 UpdateShardMigrationInfo start, msg:%+v \n", kv.gid, kv.me,kv.config.Num, msg)
@@ -305,6 +305,7 @@ func (kv *ShardKV) ApplyChDaemon() {
 					DPrintf("ShardKV[%d][%d][%d] ApplyChDaemon  Op Operation, msg:%v  op:%+v\n", kv.gid, kv.me,kv.config.Num, msg, op.Args)
 
 					kv.mu.Lock()
+					kv.handleSnapshot(msg.CommandIndex)
 					latestSeq, ok := kv.historyRequest[op.ClientId]
 					if !ok || op.SeqNum > latestSeq{
 						DPrintf("ShardKV[%d][%d][%d] ApplyChDaemon apply start, msg:%+v \n", kv.gid, kv.me,kv.config.Num, msg)
@@ -396,7 +397,7 @@ func (kv *ShardKV) readSnapshot(data []byte) {
 	d.Decode(&kv.dbPool)
 	d.Decode(&kv.historyRequest)
 	d.Decode(&kv.snapshotIndex)
-	d.Decode(& kv.inShards)
+	d.Decode(&kv.inShards)
 	d.Decode(&kv.config)
 	DPrintf("ShardKV:[%d][%d]:readSnapshot finished . config.Num(%d) , kv.dbPool:%+v", kv.gid, kv.me, kv.config.Num, kv.dbPool)
 
