@@ -27,6 +27,17 @@ func check(t *testing.T, ck *Clerk, key string, value string) {
 	log.Printf("TestStaticShards  ck.check finished,key: %s \n",key)
 }
 
+func TestReturn(t *testing.T) {
+	for{
+		for i:=0;i<10;i++{
+			fmt.Println("num:",i)
+			if i==3{
+				return
+			}
+		}
+	}
+	fmt.Print("finish")
+}
 
 // test static 2-way sharding, without shard movement.
 func TestStaticShards(t *testing.T) {
@@ -34,9 +45,9 @@ func TestStaticShards(t *testing.T) {
 
 	cfg := make_config(t, 3, false, -1)
 	defer cfg.cleanup()
-
+	fmt.Printf("Test: static shards ...11\n")
 	ck := cfg.makeClient()
-
+	fmt.Printf("Test: static shards ..222.\n")
 	log.Printf("TestStaticShards  start join \n")
 	cfg.join(0)
 	cfg.join(1)
@@ -434,16 +445,16 @@ func TestConcurrent1(t *testing.T) {
 	for i := 0; i < n; i++ {
 		<-ch
 	}
-
+	log.Printf("TestConcurrent1  finished   append  \n")
 	time.Sleep(5 * time.Second)
 	for i := 0; i < n; i++ {
+		log.Printf("TestConcurrent1  final check %d \n",i)
 		check(t, ck, ka[i], va[i])
 	}
 
 	fmt.Printf("  ... Passed\n")
 }
 
-//
 // this tests the various sources from which a re-starting
 // group might need to fetch shard contents.
 //
