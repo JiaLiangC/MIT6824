@@ -25,7 +25,7 @@ var once  sync.Once
 func getClientIdCh() chan int64 {
     once.Do(func() {
         ClientIdCh = make(chan int64, 1)
-        max := 1 << 64
+        max := 1 << 32
         go func(){
             for i :=0; i <max;i++ {
                 ClientIdCh <- int64(i)
@@ -44,6 +44,7 @@ func nrand() int64 {
 }
 
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
+	DPrintf("ShardMasterClient make clerk start")
 	ck := new(Clerk)
 	ck.servers = servers
 	// Your code here.
@@ -65,18 +66,15 @@ func (ck *Clerk) Query(num int) Config {
 	args.ClientId = ck.id
 	args.SeqNum = ck.seqnum
 	for {
-		for idx, _ := range ck.servers {
+		for _,srv := range ck.servers {
 			var reply QueryReply
 			DPrintf("ShardMasterClient[%d]:1.send a  Query to leader. LeaderId:%d, ck.seqnum:%d", ck.id, ck.LeaderId,ck.seqnum)
-			ok := ck.servers[idx].Call("ShardMaster.Query", args, &reply)
+			ok := srv.Call("ShardMaster.Query", args, &reply)
 			if ok && reply.WrongLeader == false {
 				ck.seqnum += 1
-				DPrintf("ShardMasterShardMasterClient[%d]:4.Query  Success, num is %d, ck.SeqNo: %d, LeaderId:%d, reply.Config:%v", ck.id, num, ck.seqnum, ck.LeaderId, reply.Config)
+				DPrintf("ShardMasterShardMasterClient[%d]:4.Query  Success, num is %d, ck.SeqNo: %d, LeaderId:%d, reply.Config:%v", ck.id, num, ck.seqnum, srv, reply.Config)
 				return reply.Config
-			}else{
-				DPrintf("ShardMasterShardMasterClient[%d]:4.Query  Failed, num is %d, ck.SeqNo: %d, LeaderId:%d, reply.Config:%v", ck.id, num, ck.seqnum, ck.LeaderId, reply.Config)
 			}
-			
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -126,13 +124,13 @@ func (ck *Clerk) Join(servers map[int][]string) {
 
 	for {
 		// try each known server.
-		for idx, _ := range ck.servers {
+		for _,srv := range ck.servers {
 			var reply JoinReply
 			DPrintf("ShardMasterClient[%d]:1. send a  Join to leader. LeaderId:%d, ck.seqnum:%d, servers: %v", ck.id, ck.LeaderId,ck.seqnum,servers)
-			ok := ck.servers[idx].Call("ShardMaster.Join", args, &reply)
+			ok := srv.Call("ShardMaster.Join", args, &reply)
 			if ok && reply.WrongLeader == false {
 				ck.seqnum += 1
-				DPrintf("ShardMasterClient[%d]:4.Join Client  GET JoinResponse success, ck.SeqNo: %d, LeaderId:%d", ck.id, ck.seqnum, ck.LeaderId)
+				DPrintf("ShardMasterClient[%d]:4.Join Client  GET JoinResponse success, ck.SeqNo: %d, LeaderId:%d", ck.id, ck.seqnum, srv)
 				return
 			}
 			
@@ -149,13 +147,13 @@ func (ck *Clerk) Leave(gids []int) {
 	args.SeqNum = ck.seqnum
 	for {
 		// try each known server.
-		for idx,_ := range ck.servers {
+		for _,srv := range ck.servers {
 			var reply LeaveReply
 			DPrintf("ShardMasterClient[%d]:1. send a  Leave to leader. LeaderId:%d, ck.seqnum:%d, gids:%v", ck.id, ck.LeaderId,ck.seqnum,gids)
-			ok := ck.servers[idx].Call("ShardMaster.Leave", args, &reply)
+			ok := srv.Call("ShardMaster.Leave", args, &reply)
 			if ok && reply.WrongLeader == false {
 				ck.seqnum += 1
-				DPrintf("ShardMasterClient[%d]:4.Leave Client  GET LeaveResponse success, ck.SeqNo: %d, LeaderId:%d", ck.id, ck.seqnum, ck.LeaderId)
+				DPrintf("ShardMasterClient[%d]:4.Leave Client  GET LeaveResponse success, ck.SeqNo: %d, LeaderId:%d", ck.id, ck.seqnum, srv)
 				return
 			}
 		}
@@ -172,13 +170,13 @@ func (ck *Clerk) Move(shard int, gid int) {
 	args.SeqNum = ck.seqnum
 	for {
 		// try each known server.
-		for idx,_ := range ck.servers {
+		for _,srv := range ck.servers {
 			var reply MoveReply
 			DPrintf("ShardMasterClient[%d]:1. send a  Move to leader. LeaderId:%d, ck.seqnum:%d, shard:%v, gid:%v", ck.id, ck.LeaderId,ck.seqnum, shard, gid)
-			ok := ck.servers[idx].Call("ShardMaster.Move", args, &reply)
+			ok := srv.Call("ShardMaster.Move", args, &reply)
 			if ok && reply.WrongLeader == false {
 				ck.seqnum += 1
-				DPrintf("ShardMasterClient[%d]:4.Move Client  GET MoveResponse success, ck.SeqNo: %d, LeaderId:%d", ck.id, ck.seqnum, ck.LeaderId)
+				DPrintf("ShardMasterClient[%d]:4.Move Client  GET MoveResponse success, ck.SeqNo: %d, LeaderId:%d", ck.id, ck.seqnum, srv)
 				return
 			}
 			
